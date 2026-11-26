@@ -371,11 +371,12 @@ fn generer(dossier: &Path, openssl: &Path, adresses: &[String], ca_neuve: bool) 
                 tmp.join("ca.cnf"),
                 format!(
                     "[req]\ndistinguished_name=dn\nprompt=no\nx509_extensions=v3\n\
-                     [dn]\nCN=WEB tools {} (CA locale)\n[v3]\n\
+                     [dn]\nCN=web_bureau (CA locale){}\n[v3]\n\
                      basicConstraints=critical,CA:TRUE,pathlen:0\n\
                      keyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n\
                      nameConstraints=critical,{}\n",
-                    if nom.is_empty() { "poste" } else { &nom },
+                    // web_bureau : nom fixe, sous la limite de 64 caractères du CN, et distinct des autres web tools
+                    "",
                     contraintes.join(",")
                 ),
             )?;

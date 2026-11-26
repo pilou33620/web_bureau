@@ -163,6 +163,7 @@ function recuTexte(m) {
       break;
     case 'etat':
       $('verrou').hidden = !m.verrouille;
+      if (m.verrouille) sansVoile(); // macOS peut ne plus envoyer d'image : le champ doit rester visible
       break;
     case 'fin':
       finVoulue = true;
