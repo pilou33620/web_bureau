@@ -3,8 +3,8 @@
 //! Un serveur qui écoute sur le réseau local exige des autres appareils un jeton.
 //! Le serveur affiche dans son terminal un code à 6 chiffres, que l'on saisit sur
 //! la tablette. Le code ne remplace pas le jeton, il le DONNE : bon code, la
-//! tablette reçoit le cookie du jeton. Ce poste lui-même (boucle locale) n'a
-//! jamais besoin de code.
+//! tablette reçoit le cookie du jeton. Dans web_bureau, ce poste lui-même (boucle
+//! locale) doit aussi donner le code : voir Garde::autorise.
 //!
 //! Copie de la caisse web_tools_commun (web_suite/commun), rendue INDÉPENDANTE : web_bureau
 //! contrôle tout le Mac, il a son propre jeton (~/.web_tools/web_bureau/jeton.txt), son propre
@@ -825,7 +825,9 @@ impl Garde {
     }
 
     pub fn autorise(&self, r: &Requete) -> bool {
-        !self.actif || ce_poste(r) || jeton_recu(r, self.jeton.as_deref().unwrap_or(""))
+        // web_bureau : PAS d'exemption de ce poste (écart voulu avec la caisse) : il voit l'écran et tape au
+        // clavier, un autre compte ou un programme sans permission n'y entre pas par 127.0.0.1
+        !self.actif || jeton_recu(r, self.jeton.as_deref().unwrap_or(""))
     }
 
     pub fn biscuit(&self, r: &Requete) -> String {

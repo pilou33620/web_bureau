@@ -25,7 +25,6 @@ socket2 = "0.5" # écoute IPv4 + IPv6 sur la même socket
 gethostname = "0.5" # nom du poste (Host permis, certificat)
 chrono = { version = "0.4", default-features = false, features = ["clock"] } # heure du journal
 ureq = "2" # mise à jour sans git (rustls + webpki-roots)
-zip = { version = "2", default-features = false, features = ["deflate"] } # archives de mise à jour (zip)
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6" # appels Objective-C : ScreenCaptureKit, écran virtuel, AppKit

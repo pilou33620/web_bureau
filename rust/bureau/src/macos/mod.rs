@@ -118,6 +118,7 @@ extern "C" {
     pub static kCVPixelBufferIOSurfacePropertiesKey: CFStringRef;
     pub fn CVPixelBufferCreate(alloc: *const c_void, l: usize, h: usize, format: u32, attributs: CFTypeRef, sortie: *mut *mut c_void) -> i32;
     pub fn CVPixelBufferRelease(b: *mut c_void);
+    fn CVPixelBufferRetain(b: *mut c_void) -> *mut c_void;
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -143,6 +144,7 @@ extern "C" {
 extern "C" {
     fn IOPMAssertionCreateWithName(genre: CFStringRef, niveau: u32, nom: CFStringRef, id: *mut u32) -> i32;
     fn IOPMAssertionRelease(id: u32) -> i32;
+    fn IOPMAssertionDeclareUserActivity(nom: CFStringRef, genre: u32, id: *mut u32) -> i32;
 }
 
 extern "C" {
@@ -314,6 +316,34 @@ pub struct Assertion(u32);
 impl Drop for Assertion {
     fn drop(&mut self) {
         unsafe { IOPMAssertionRelease(self.0) };
+    }
+}
+
+/// Rallume l'écran s'il s'est éteint (comme un geste de l'utilisateur) : un écran éteint n'est pas capturé.
+pub fn reveiller_ecran() {
+    let nom = cf_chaine("web_bureau");
+    let mut id = 0u32;
+    unsafe { IOPMAssertionDeclareUserActivity(nom.0, 0, &mut id) }; // kIOPMUserActiveLocal
+}
+
+/// Une image de capture gardée au-delà de son rappel (CVPixelBuffer retenu), rendue à la fin de sa portée.
+pub struct Image(*mut c_void);
+
+// SAFETY: un CVPixelBuffer retenu se lit depuis n'importe quel fil.
+unsafe impl Send for Image {}
+
+impl Image {
+    pub fn retenir(tampon: *mut c_void) -> Image {
+        Image(unsafe { CVPixelBufferRetain(tampon) })
+    }
+    pub fn tampon(&self) -> *mut c_void {
+        self.0
+    }
+}
+
+impl Drop for Image {
+    fn drop(&mut self) {
+        unsafe { CVPixelBufferRelease(self.0) }
     }
 }
 

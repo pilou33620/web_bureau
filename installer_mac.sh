@@ -33,12 +33,13 @@ cat > "$PLIST" <<FIN
 </plist>
 FIN
 : > "$JOURNAL"
+chmod 600 "$JOURNAL" # il contient le code d'appairage : pas lisible par les autres comptes du Mac
 launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 
 echo
-echo "2. Énergie : jamais de veille, redémarrage après une coupure de courant (mot de passe administrateur)"
-sudo pmset -a sleep 0 disksleep 0 autorestart 1 || echo "   [!] pmset refusé : réglez-le dans Réglages › Économie d'énergie."
+echo "2. Énergie : ni veille ni extinction de l'écran, redémarrage après une coupure de courant (mot de passe administrateur)"
+sudo pmset -a sleep 0 disksleep 0 displaysleep 0 autorestart 1 || echo "   [!] pmset refusé : réglez-le dans Réglages › Économie d'énergie."
 
 echo
 echo "3. Permissions : macOS affiche deux demandes pour « web_bureau »."
@@ -48,11 +49,15 @@ sleep 2
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
 printf "   Appuyez sur Entrée une fois les deux permissions accordées… "
 read -r _
-launchctl kickstart -k "gui/$(id -u)/$NOM" # macOS ne les applique qu'au redémarrage du programme
+: > "$JOURNAL" # le code du premier lancement ne vaut plus rien : seul celui de la relance doit s'afficher
+launchctl kickstart -k "gui/$(id -u)/$NOM" # macOS n'applique les permissions qu'au redémarrage du programme
 
 echo
 echo "4. Pour un Mac sans écran (à régler une fois dans Réglages Système) :"
 echo "   - Utilisateurs et groupes › Ouverture de session automatique (FileVault doit être désactivé) ;"
+echo "   - Écran verrouillé › « Exiger le mot de passe après l'économiseur d'écran ou l'extinction de l'écran » : Jamais,"
+echo "     et « Lancer l'économiseur d'écran » : Jamais. Sinon macOS verrouille le Mac tout seul. À remettre"
+echo "     seulement quand le test de déverrouillage (page Infos, sur l'iPad) a réussi ;"
 echo "   - Général › Partage › Session à distance (SSH, accès de secours ; ajoutez votre clé dans ~/.ssh/authorized_keys)."
 
 echo

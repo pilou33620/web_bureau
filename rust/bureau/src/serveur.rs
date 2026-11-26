@@ -223,7 +223,6 @@ fn router(r: &mut Requete) -> Reponse {
             let ip = r.client.ip();
             r.websocket(&[], move |c| session(c, ip))
         }
-        ("GET", "/api/etat") => api_etat(),
         ("GET", "/api/touches") => Reponse::json(200, &json!(crate::clavier::codes())),
         ("GET", "/api/diagnostic") => api_diagnostic(),
         ("POST", "/api/diagnostic/deverrouillage") => api_essai_deverrouillage(r),
@@ -234,22 +233,6 @@ fn router(r: &mut Requete) -> Reponse {
         _ => detail(404, "introuvable"),
     }));
     resultat.unwrap_or_else(|_| detail(500, "erreur interne"))
-}
-
-fn api_etat() -> Reponse {
-    let e = etat();
-    let ecran = verrou(&e.ecran).as_ref().map(|v| json!([v.largeur, v.hauteur]));
-    Reponse::json(
-        200,
-        &json!({
-            "version": crate::VERSION,
-            "permissions": {"ecran": macos::permission_ecran(false), "accessibilite": macos::permission_accessibilite(false)},
-            "verrouille": macos::ecran_verrouille(),
-            "deverrouillage_verifie": verrou(&e.reglages).deverrouillage_verifie,
-            "ecran_virtuel": ecran,
-            "session": verrou(&e.session).as_ref().map(|s| s.ip.to_string()),
-        }),
-    )
 }
 
 fn api_diagnostic() -> Reponse {
@@ -391,6 +374,38 @@ struct Flux {
     regulation: Mutex<Regulation>,
     image_cle: AtomicBool,
     numero: AtomicU32,
+    /// La dernière capture qui n'a pas pu partir : macOS n'en redonne pas tant que l'écran ne change plus.
+    en_attente: Mutex<Option<(macos::Image, CMTime)>>,
+}
+
+/// Donne une image à l'encodeur si l'iPad suit. false : pas partie (iPad ou encodeur occupés), à garder.
+fn pousser(flux: &Flux, encodeur: &Mutex<Option<Encodeur>>, image: *mut std::ffi::c_void, pts: CMTime) -> bool {
+    let t = Instant::now();
+    // jamais la régulation tenue pendant l'encodage : le rappel de l'encodeur la prend
+    let debit = {
+        let mut reg = verrou(&flux.regulation);
+        if !reg.peut_envoyer(t) {
+            return false; // l'iPad n'a pas encore décodé
+        }
+        reg.debit()
+    };
+    let n = flux.numero.fetch_add(1, Ordering::SeqCst);
+    verrou(&flux.regulation).envoyee(n, t);
+    let cle = flux.image_cle.swap(false, Ordering::SeqCst);
+    let donnee = match verrou(encodeur).as_mut() {
+        Some(enc) => {
+            enc.regler_debit(debit);
+            enc.encoder(image, pts, cle, n)
+        }
+        None => false,
+    };
+    if !donnee {
+        verrou(&flux.regulation).oubliee(n);
+        if cle {
+            flux.image_cle.store(true, Ordering::SeqCst);
+        }
+    }
+    donnee
 }
 
 fn envoyer_texte(c: &mut dyn Duplex, v: &Value) -> io::Result<()> {
@@ -446,7 +461,10 @@ fn session(c: &mut dyn Duplex, ip: IpAddr) {
     if raison == "inactivite" && verrou(&e.reglages).deverrouillage_verifie {
         verrou(&e.entrees).verrouiller();
     }
-    let _ = envoyer_texte(c, &json!({"t": "fin", "raison": raison}));
+    if raison != "erreur" {
+        // une erreur a déjà envoyé son motif : « fin » l'effacerait de la page
+        let _ = envoyer_texte(c, &json!({"t": "fin", "raison": raison}));
+    }
     let mut s = verrou(&e.session);
     if s.as_ref().is_some_and(|s| Arc::ptr_eq(s, &moi)) {
         *s = None;
@@ -484,10 +502,11 @@ fn derouler(
     verrou(&e.entrees).regler_ecran(ecran);
     println!("[{}] session {} : {}×{}", appairage::heure(), moi.ip, l, h);
     barre_menus::afficher(format!("● web_bureau — {}", moi.ip));
+    macos::reveiller_ecran();
     let _veille = macos::empecher("PreventUserIdleDisplaySleep");
 
     let depart = Instant::now();
-    let flux = Arc::new(Flux { regulation: Mutex::new(Regulation::new(Qualite::Auto, depart)), image_cle: AtomicBool::new(true), numero: AtomicU32::new(1) });
+    let flux = Arc::new(Flux { regulation: Mutex::new(Regulation::new(Qualite::Auto, depart)), image_cle: AtomicBool::new(true), numero: AtomicU32::new(1), en_attente: Mutex::new(None) });
     let (tx, rx) = mpsc::sync_channel::<Message>(8);
 
     // encodeur : HEVC si Safari le décode et que la puce l'accepte, sinon H.264
@@ -531,31 +550,9 @@ fn derouler(
             l,
             h,
             Box::new(move |image: *mut std::ffi::c_void, pts: CMTime| {
-                let t = Instant::now();
-                // jamais la régulation tenue pendant l'encodage : le rappel de l'encodeur la prend
-                let debit = {
-                    let mut reg = verrou(&flux.regulation);
-                    if !reg.peut_envoyer(t) {
-                        return; // l'iPad n'a pas encore décodé : on saute cette capture
-                    }
-                    reg.debit()
-                };
-                let n = flux.numero.fetch_add(1, Ordering::SeqCst);
-                verrou(&flux.regulation).envoyee(n, t);
-                let cle = flux.image_cle.swap(false, Ordering::SeqCst);
-                let donnee = match verrou(&encodeur).as_mut() {
-                    Some(enc) => {
-                        enc.regler_debit(debit);
-                        enc.encoder(image, pts, cle, n)
-                    }
-                    None => false,
-                };
-                if !donnee {
-                    verrou(&flux.regulation).oubliee(n);
-                    if cle {
-                        flux.image_cle.store(true, Ordering::SeqCst);
-                    }
-                }
+                // tenu pendant l'envoi : une image gardée ne part jamais après une plus récente
+                let mut attente = verrou(&flux.en_attente);
+                *attente = if pousser(&flux, &encodeur, image, pts) { None } else { Some((macos::Image::retenir(image), pts)) };
             }),
         )
     };
@@ -640,7 +637,7 @@ fn derouler(
             }
             match entree {
                 Entree::Souris { x, y } => verrou(&e.entrees).souris(x, y),
-                Entree::Bouton { b, bas } => verrou(&e.entrees).bouton(b, bas),
+                Entree::Bouton { b, bas, simple } => verrou(&e.entrees).bouton(b, bas, simple),
                 Entree::Molette { dx, dy } => verrou(&e.entrees).molette(dx, dy),
                 Entree::Touche { kvk, bas } => verrou(&e.entrees).touche(kvk, bas),
                 Entree::Texte(s) => verrou(&e.entrees).texte(&s),
@@ -652,14 +649,23 @@ fn derouler(
                     presse_papiers::ecrire(&texte);
                     pp_compteur = presse_papiers::compteur(); // pas d'écho vers l'iPad
                 }
-                Entree::Deverrouiller(mdp) => {
+                // jamais sur un Mac déjà ouvert : le mot de passe partirait dans la fenêtre active
+                Entree::Deverrouiller(mdp) if macos::ecran_verrouille() => {
                     derniere_entree = Instant::now();
                     // hors du fil de la session : la saisie prend une seconde
                     std::thread::spawn(move || verrou(&etat().entrees).deverrouiller(&mdp));
                 }
+                Entree::Deverrouiller(_) => {}
                 Entree::Pong { n } if n == n_ping => rtt_ms = ping_envoye.elapsed().as_secs_f64() * 1000.0,
                 Entree::Qualite(q) => verrou(&flux.regulation).qualite(q),
                 Entree::Pong { .. } | Entree::Bonjour { .. } => {}
+            }
+        }
+        // l'image gardée part dès que l'iPad a rattrapé : la dernière image d'un changement arrive toujours
+        {
+            let mut attente = verrou(&flux.en_attente);
+            if attente.as_ref().is_some_and(|(image, pts)| pousser(&flux, &encodeur, image.tampon(), *pts)) {
+                *attente = None;
             }
         }
         let maintenant = Instant::now();
@@ -722,25 +728,53 @@ fn mises_a_jour(args: &Args) {
         maj::Decision::Compter(n) => println!("  Nouvelle version à l'essai (démarrage {n}/{}).", maj::ESSAIS_MAX),
         maj::Decision::Rien => {}
     }
-    let b = bin.clone();
     std::thread::spawn(move || {
         std::thread::sleep(maj::TENUE);
-        maj::tenue(&b);
+        maj::tenue(&bin);
     });
     if args.sans_maj || !production::est_copie_prod(&racine) {
         return;
     }
-    if decision == maj::Decision::Rien {
-        let _ = maj::avant(&exe); // la version actuelle a fait ses preuves : on la garde
+    let relancer = || {
+        println!("  Nouvelle version installée : relance.");
+        std::process::exit(production::CODE_MIS_A_JOUR); // launchd relance la nouvelle
+    };
+    if installer_maj(&exe, decision == maj::Decision::Rien) {
+        relancer();
     }
-    match production::mettre_a_jour(DEPOT, "web_bureau", &racine, &|t| println!("  Mises à jour : {t}")) {
-        Ok(true) => {
-            let _ = maj::apres(&bin);
-            println!("  Nouvelle version installée : relance.");
-            std::process::exit(production::CODE_MIS_A_JOUR);
+    // l'outil tourne des semaines sans s'arrêter : revérifier chaque jour, jamais pendant une session
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(24 * 3600));
+        attendre_sans_session();
+        if installer_maj(&exe, true) {
+            attendre_sans_session();
+            relancer();
         }
-        Ok(false) => {}
-        Err(e) => println!("  [!] {e}"),
+    });
+}
+
+/// Installe la mise à jour publiée, s'il y en a une ; true : sortir avec le code 75 pour la lancer.
+/// `garder_actuelle` : la version actuelle a fait ses preuves, elle devient celle du retour arrière.
+fn installer_maj(exe: &Path, garder_actuelle: bool) -> bool {
+    if garder_actuelle {
+        let _ = maj::avant(exe);
+    }
+    match production::mettre_a_jour(DEPOT, "web_bureau", &racine(), &|t| println!("  Mises à jour : {t}")) {
+        Ok(true) => {
+            let _ = maj::apres(exe.parent().unwrap_or(Path::new(".")));
+            true
+        }
+        Ok(false) => false,
+        Err(e) => {
+            println!("  [!] {e}");
+            false
+        }
+    }
+}
+
+fn attendre_sans_session() {
+    while ETAT.get().is_some_and(|e| verrou(&e.session).is_some()) {
+        std::thread::sleep(Duration::from_secs(60));
     }
 }
 
@@ -757,12 +791,15 @@ pub fn main() {
             std::process::exit(2);
         }
     };
+    if args.nouveau_jeton {
+        // le serveur en service garde l'ancien jeton en mémoire : il faut le relancer, pas en démarrer un second
+        let _ = std::fs::remove_file(appairage::fichier_jeton());
+        println!("Jeton retiré. Relancez web_bureau pour que tous les appareils perdent l'accès :");
+        println!("  launchctl kickstart -k gui/$(id -u)/fr.pilou.web_bureau");
+        return;
+    }
     println!("\n  web_bureau {} — {}", crate::VERSION, appairage::heure());
     mises_a_jour(&args);
-    if args.nouveau_jeton {
-        let _ = std::fs::remove_file(appairage::fichier_jeton());
-        println!("  Jeton remplacé : chaque appareil devra saisir un nouveau code.");
-    }
 
     // permissions (la demande de macOS s'affiche sur l'écran du Mac, à accepter une fois)
     let ecran_ok = macos::permission_ecran(true);
@@ -803,6 +840,7 @@ pub fn main() {
             std::process::exit(1);
         }
     };
+    srv.regler_delai(10);
     if srv.port() != args.port {
         println!("  (le port {} était occupé)", args.port);
     }
@@ -814,7 +852,6 @@ pub fn main() {
         println!("[X] HTTPS impossible (openssl introuvable ou WEB_BUREAU_HTTP=1) : refus du mode réseau.");
         std::process::exit(3);
     }
-    println!("  Sur ce Mac : http://127.0.0.1:{}/", srv.port());
     if reseau {
         println!("  Depuis l'iPad :");
         for ip in appairage::adresses_poste().iter().filter(|i| !i.starts_with("127.")) {
@@ -913,7 +950,7 @@ mod essais {
         assert_eq!(code(&req(tete("POST /api/fichiers/envoyer?nom=a.txt", &gros))), "413");
         // routes inconnues, méthodes refusées
         assert_eq!(code(&req(tete("GET /api/inconnue", ""))), "404");
-        assert_eq!(code(&req(tete("DELETE /api/etat", h))), "404");
+        assert_eq!(code(&req(tete("DELETE /api/touches", h))), "404");
         // WebSocket d'un autre site
         let ws = "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: https://piege.exemple\r\n";
         assert_eq!(code(&req(tete("GET /ws", ws))), "403");

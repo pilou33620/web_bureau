@@ -40,12 +40,14 @@ test('toucher court = clic gauche à l\'endroit touché', () => {
   assert.deepStrictEqual(actions[0], { t: 'souris', x: 100, y: 50 });
 });
 
-test('double toucher = deux clics (le Mac compte le double clic)', () => {
-  const { g, avancer, doigt, boutons } = banc();
+test('double toucher = deux clics au même point (le Mac compte le double clic)', () => {
+  const { g, actions, avancer, doigt, boutons } = banc();
   g.bas(doigt(1, 100, 50)); avancer(60); g.haut(doigt(1, 100, 50));
   avancer(120);
-  g.bas(doigt(2, 102, 52)); avancer(60); g.haut(doigt(2, 102, 52));
+  g.bas(doigt(2, 112, 58)); avancer(60); g.haut(doigt(2, 112, 58));
   assert.strictEqual(boutons(), '0v 0^ 0v 0^');
+  // le second clic part de la position du premier : le Mac n'accepte que 5 points d'écart
+  assert.deepStrictEqual(actions.filter((a) => a.t === 'souris'), [{ t: 'souris', x: 100, y: 50 }, { t: 'souris', x: 100, y: 50 }]);
 });
 
 test('appui long immobile = clic droit, sans clic gauche au relâchement', () => {
@@ -65,6 +67,7 @@ test('toucher puis appui maintenu et glisser = glisser-déposer', () => {
   g.bouge(doigt(2, 200, 120));
   g.haut(doigt(2, 200, 120));
   assert.strictEqual(boutons(), '0v 0^ 0v 0^');
+  assert.deepStrictEqual(actions.filter((a) => a.t === 'bouton' && a.bas).map((a) => !!a.simple), [false, true]);
   const derniere = actions.filter((a) => a.t === 'souris').pop();
   assert.deepStrictEqual(derniere, { t: 'souris', x: 200, y: 120 });
 });
@@ -97,6 +100,9 @@ test('glisser à 2 doigts = défilement, puis inertie', () => {
   g.haut(doigt(1, 100, 100)); g.haut(doigt(2, 160, 100));
   const pendant = actions.filter((a) => a.t === 'molette').length;
   assert.ok(pendant > 0);
+  // le curseur du Mac est amené sous les doigts avant le premier défilement
+  assert.deepStrictEqual(actions[0], { t: 'souris', x: 130, y: 300 });
+  assert.strictEqual(actions[1].t, 'molette');
   assert.ok(actions.filter((a) => a.t === 'molette').every((a) => a.dy > 0), 'doigts vers le haut : le contenu monte (dy > 0)');
   avancer(2000);
   assert.ok(actions.filter((a) => a.t === 'molette').length > pendant, 'inertie');

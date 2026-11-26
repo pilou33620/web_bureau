@@ -12,8 +12,11 @@ pub const EN_VOL_MAX: usize = 2;
 pub const DEBIT_MIN: u32 = 2_000_000;
 /// Une image sans accusé de réception depuis ce délai est tenue pour perdue (page en arrière-plan).
 pub const PERDUE: Duration = Duration::from_secs(1);
-const RETARD_HAUT: f64 = 0.080; // s : on baisse
-const RETARD_BAS: f64 = 0.030; // s : on peut monter
+// Délais comparés au meilleur délai observé (encodage + réseau + décodage, propre à chaque installation).
+// shortcut: ce meilleur délai ne remonte jamais pendant une session ; à faire vieillir si un réseau qui se
+// dégrade durablement laisse le débit au plancher.
+const MARGE_HAUTE: f64 = 0.060; // s au-dessus : on baisse
+const MARGE_BASSE: f64 = 0.015; // s au-dessus : on peut monter
 
 pub fn debit_max(q: Qualite) -> u32 {
     match q {
@@ -28,6 +31,7 @@ pub struct Regulation {
     debit: u32,
     max: u32,
     retard_lisse: f64,
+    retard_min: f64,
     derniere_hausse: Instant,
     derniere_baisse: Instant,
 }
@@ -35,12 +39,13 @@ pub struct Regulation {
 impl Regulation {
     pub fn new(q: Qualite, t: Instant) -> Self {
         let max = debit_max(q);
-        Regulation { en_vol: VecDeque::new(), debit: (max / 2).max(DEBIT_MIN), max, retard_lisse: 0.0, derniere_hausse: t, derniere_baisse: t }
+        Regulation { en_vol: VecDeque::new(), debit: (max / 2).max(DEBIT_MIN), max, retard_lisse: 0.0, retard_min: f64::INFINITY, derniere_hausse: t, derniere_baisse: t }
     }
 
     pub fn qualite(&mut self, q: Qualite) {
+        // repart de la moitié du plafond : sinon un passage par « Économe » laissait le débit en bas
         self.max = debit_max(q);
-        self.debit = self.debit.min(self.max);
+        self.debit = (self.max / 2).max(DEBIT_MIN);
     }
 
     pub fn debit(&self) -> u32 {
@@ -84,12 +89,13 @@ impl Regulation {
         }
         let Some(retard) = retard else { return };
         self.retard_lisse = 0.8 * self.retard_lisse + 0.2 * retard;
-        if retard > RETARD_HAUT {
+        self.retard_min = self.retard_min.min(retard);
+        if retard > self.retard_min + MARGE_HAUTE {
             if t.duration_since(self.derniere_baisse) > Duration::from_millis(200) {
                 self.debit = ((self.debit as f64 * 0.85) as u32).max(DEBIT_MIN);
                 self.derniere_baisse = t;
             }
-        } else if self.retard_lisse < RETARD_BAS
+        } else if self.retard_lisse < self.retard_min + MARGE_BASSE
             && t.duration_since(self.derniere_hausse) > Duration::from_millis(500)
             && t.duration_since(self.derniere_baisse) > Duration::from_secs(2)
         {
@@ -134,8 +140,14 @@ mod essais {
         let t0 = Instant::now();
         let mut r = Regulation::new(Qualite::Auto, t0);
         let depart = r.debit();
+        // le délai normal de cette installation : 40 ms (au-dessus de tout seuil fixe raisonnable)
+        for i in 0..5u32 {
+            let t = t0 + Duration::from_millis(10 * i as u64);
+            r.envoyee(i, t);
+            r.accusee(i, t + Duration::from_millis(40));
+        }
         // accusés lents : le débit baisse, jusqu'au plancher
-        for i in 0..100u32 {
+        for i in 5..100u32 {
             let t = t0 + Duration::from_millis(300 * i as u64);
             r.envoyee(i, t);
             r.accusee(i, t + Duration::from_millis(150));
@@ -146,10 +158,13 @@ mod essais {
         for i in 100..400u32 {
             let t = t0 + Duration::from_millis(300 * i as u64);
             r.envoyee(i, t);
-            r.accusee(i, t + Duration::from_millis(5));
+            r.accusee(i, t + Duration::from_millis(42));
         }
         assert_eq!(r.debit(), debit_max(Qualite::Auto));
+        // un changement de qualité repart de la moitié du nouveau plafond, vers le haut comme vers le bas
         r.qualite(Qualite::Econome);
-        assert_eq!(r.debit(), debit_max(Qualite::Econome));
+        assert_eq!(r.debit(), debit_max(Qualite::Econome) / 2);
+        r.qualite(Qualite::Maximum);
+        assert_eq!(r.debit(), debit_max(Qualite::Maximum) / 2);
     }
 }

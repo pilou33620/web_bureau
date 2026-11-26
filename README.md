@@ -21,8 +21,8 @@ L'installateur :
 
 1. pose un LaunchAgent (`~/Library/LaunchAgents/fr.pilou.web_bureau.plist`) qui lance web_bureau à
    l'ouverture de session et le relance s'il s'arrête ;
-2. règle l'énergie : jamais de veille, redémarrage après une coupure de courant (`pmset`, mot de
-   passe administrateur) ;
+2. règle l'énergie : ni veille ni extinction de l'écran, redémarrage après une coupure de courant
+   (`pmset`, mot de passe administrateur) ;
 3. ouvre les Réglages pour **Enregistrement de l'écran** et **Accessibilité** (à accorder à
    « web_bureau ») ;
 4. affiche les adresses, l'empreinte de la CA et le **code d'appairage**.
@@ -31,6 +31,10 @@ L'installateur :
 
 - **Ouverture de session automatique** (Utilisateurs et groupes). macOS l'interdit tant que FileVault
   est actif.
+- **Écran verrouillé** : « Exiger le mot de passe après l'économiseur d'écran ou l'extinction de
+  l'écran » sur *Jamais*, et pas d'économiseur d'écran. Sinon macOS verrouille le Mac tout seul, que
+  web_bureau le veuille ou non. À remettre seulement quand le test de déverrouillage (Infos, sur
+  l'iPad) a réussi.
 - **Session à distance (SSH)**, avec une clé seulement : c'est l'accès de secours si web_bureau ne
   répond plus.
 
@@ -79,6 +83,8 @@ Un appareil appairé contrôle **tout** le Mac. Ce qui protège l'accès :
   (`web_bureau_jeton`) : un appareil appairé à un autre web tool n'entre pas ;
 - le **code d'appairage** à 6 chiffres, affiché seulement sur le Mac : usage unique, 10 min, 5
   erreurs puis pause croissante ;
+- **aucune exemption pour le Mac lui-même** (écart voulu avec les autres web tools) : un autre compte
+  ou un programme du Mac qui passe par `127.0.0.1` doit lui aussi présenter le jeton ;
 - **HTTPS obligatoire**, avec la CA propre à web_bureau (`~/.web_tools/web_bureau/tls/`) : sans
   openssl, web_bureau refuse le mode réseau au lieu de passer en clair ;
 - les adresses publiques sont refusées (réseau local et Tailscale seulement), et les en-têtes `Host`
@@ -92,12 +98,13 @@ Un appareil appairé contrôle **tout** le Mac. Ce qui protège l'accès :
   termine sans verrouiller, pour ne jamais enfermer un Mac sans écran ;
 - jamais de jeton, de mot de passe, de texte copié ni de frappe dans le journal.
 
-Retirer l'accès à tous les appareils : `~/web_bureau/bin/web_bureau --nouveau-jeton` (ou supprimer
-le fichier du jeton), puis relancer.
+Retirer l'accès à tous les appareils : `~/web_bureau/bin/web_bureau --nouveau-jeton` (la commande
+retire le jeton et sort), puis relancer le service :
+`launchctl kickstart -k gui/$(id -u)/fr.pilou.web_bureau`. Le journal donne alors un nouveau code.
 
 ## Mises à jour
 
-Au démarrage, web_bureau compare l'empreinte de la publication « binaires » à la sienne. Si une
+Au démarrage, puis une fois par jour quand aucune session n'est ouverte, web_bureau compare l'empreinte de la publication « binaires » à la sienne. Si une
 nouvelle version existe, il la télécharge, vérifie son SHA-256, la pose, puis sort avec le code 75 ;
 launchd le relance. Une nouvelle version qui échoue 3 fois au démarrage est remplacée par la
 précédente (`bin/web_bureau.precedent`). La CI signe chaque version avec le même certificat : macOS
@@ -121,7 +128,8 @@ web_bureau [--port N] [--local] [--sans-maj] [--sans-ecran-virtuel] [--nouveau-j
            [--sans-navigateur] [--sans-pause]
 ```
 
-Port 8803 par défaut (le suivant s'il est pris). `--local` : 127.0.0.1 seulement (essais).
+Port 8803 par défaut (le suivant s'il est pris). `--local` : 127.0.0.1 seulement et **sans jeton**,
+pour les essais ; jamais en service.
 
 ## Limites connues
 
@@ -141,6 +149,9 @@ Port 8803 par défaut (le suivant s'il est pris). `--local` : 127.0.0.1 seulemen
 
 - Le code s'écrit sur le Pi, qui ne compile pas. La CI GitHub (macOS, Apple Silicon) lance les tests
   (`cargo test`, `node --test tests/*.test.js`) et publie l'exécutable signé.
+- `Cargo.lock` est suivi par git et la CI compile avec `--locked` : les bibliothèques ne changent que
+  quand on le décide. Le Pi n'ayant pas cargo, on le refait par la CI : `gh workflow run verrou.yml`,
+  puis `gh run download` de l'artefact `Cargo.lock`, à relire et committer.
 - Tests : protocole, trames WebSocket, régulation du débit, fichiers (confinement, liens
   symboliques, envoi coupé), retour arrière des mises à jour, réglages abîmés, refus du serveur
   (CSRF, tailles, Origin), sécurité de l'appairage (tests recopiés de la caisse commune, HTTPS

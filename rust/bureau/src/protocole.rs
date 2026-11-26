@@ -31,8 +31,8 @@ pub enum Entree {
     Bonjour { largeur: u32, hauteur: u32, codecs: Vec<Codec> },
     /// Position normalisée dans l'image (0..1).
     Souris { x: f64, y: f64 },
-    /// 0 gauche, 1 droit, 2 milieu.
-    Bouton { b: u8, bas: bool },
+    /// 0 gauche, 1 droit, 2 milieu. `simple` : jamais un double clic (début d'un glisser tactile).
+    Bouton { b: u8, bas: bool, simple: bool },
     /// Pixels ; dy > 0 fait descendre le contenu (sens du navigateur).
     Molette { dx: f64, dy: f64 },
     /// Code virtuel macOS déjà traduit (clavier physique).
@@ -104,7 +104,7 @@ pub fn lire(message: &str) -> Result<Entree, String> {
         "souris" => Entree::Souris { x: dans_l_image(nombre(&v, "x")?)?, y: dans_l_image(nombre(&v, "y")?)? },
         "bouton" => {
             let b = v["b"].as_u64().filter(|b| *b <= 2).ok_or("bouton invalide")? as u8;
-            Entree::Bouton { b, bas: booleen(&v, "bas")? }
+            Entree::Bouton { b, bas: booleen(&v, "bas")?, simple: v["simple"].as_bool().unwrap_or(false) }
         }
         "molette" => {
             let (dx, dy) = (nombre(&v, "dx")?, nombre(&v, "dy")?);
@@ -172,7 +172,8 @@ mod essais {
             Ok(Entree::Bonjour { largeur: 2266, hauteur: 1488, codecs: vec![Codec::Hevc, Codec::Avc] })
         );
         assert_eq!(lire(r#"{"t":"souris","x":0.5,"y":1}"#), Ok(Entree::Souris { x: 0.5, y: 1.0 }));
-        assert_eq!(lire(r#"{"t":"bouton","b":1,"bas":true}"#), Ok(Entree::Bouton { b: 1, bas: true }));
+        assert_eq!(lire(r#"{"t":"bouton","b":1,"bas":true}"#), Ok(Entree::Bouton { b: 1, bas: true, simple: false }));
+        assert_eq!(lire(r#"{"t":"bouton","b":0,"bas":true,"simple":true}"#), Ok(Entree::Bouton { b: 0, bas: true, simple: true }));
         assert_eq!(lire(r#"{"t":"touche","code":"KeyQ","bas":false}"#), Ok(Entree::Touche { kvk: 0x0C, bas: false }));
         assert_eq!(lire(r#"{"t":"texte","s":"é😀"}"#), Ok(Entree::Texte("é😀".into())));
         assert_eq!(

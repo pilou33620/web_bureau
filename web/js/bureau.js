@@ -41,6 +41,7 @@ async function codecsDecodables([l, h]) {
   const essais = [['hevc', 'hvc1.1.6.L153.B0'], ['avc', 'avc1.640034']];
   const oui = [];
   for (const [nom, codec] of essais) {
+    if (nom === 'hevc' && sansHevc) continue;
     try {
       const r = await VideoDecoder.isConfigSupported({ codec, codedWidth: l, codedHeight: h, hardwareAcceleration: 'prefer-hardware' });
       if (r.supported) oui.push(nom);
@@ -64,11 +65,18 @@ async function connecter() {
   }
   finVoulue = false;
   voile('Connexion au Mac…');
-  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { tailleConnectee = taille; envoyer({ t: 'bonjour', ecran: taille, codecs }); envoyer({ t: 'qualite', q: qualite }); };
-  ws.onmessage = (ev) => (typeof ev.data === 'string' ? recuTexte(JSON.parse(ev.data)) : recuImage(ev.data));
-  ws.onclose = () => {
+  const moi = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
+  ws = moi;
+  dernierSignal = performance.now() + 10000; // le Mac peut mettre quelques secondes à lancer la capture
+  moi.binaryType = 'arraybuffer';
+  moi.onopen = () => { tailleConnectee = taille; envoyer({ t: 'bonjour', ecran: taille, codecs }); };
+  moi.onmessage = (ev) => {
+    dernierSignal = performance.now();
+    if (typeof ev.data === 'string') recuTexte(JSON.parse(ev.data));
+    else recuImage(ev.data);
+  };
+  moi.onclose = () => {
+    if (ws !== moi) return; // déjà remplacée (liaison abandonnée, reprise)
     fermerDecodeur();
     ws = null;
     if (!finVoulue) {
@@ -77,6 +85,22 @@ async function connecter() {
     }
   };
 }
+
+// Abandonne la liaison sans attendre sa fermeture (elle peut traîner sur un réseau coupé) et en ouvre une autre.
+function reconnecter(texte) {
+  const vieille = ws;
+  ws = null;
+  if (vieille) vieille.close();
+  fermerDecodeur();
+  voile(texte);
+  connecter();
+}
+
+// Le Mac envoie un signal par seconde : après 5 s de silence, la liaison est morte (Wi-Fi coupé).
+let dernierSignal = 0;
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN && performance.now() - dernierSignal > 5000) reconnecter('Connexion perdue, nouvel essai…');
+}, 2000);
 
 function envoyer(m) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
@@ -93,18 +117,43 @@ function fermerDecodeur() {
   decodeur = null;
 }
 
+let erreursDecodeur = 0; // de suite, remis à zéro par une image affichée
+let sansHevc = false;
+
+// Trois erreurs de suite : Safari refuse ce flux. On repart en H.264, puis on le dit plutôt que de boucler.
+function erreurDecodeur() {
+  if (++erreursDecodeur < 3) {
+    envoyer({ t: 'image_cle' });
+    setTimeout(configurer, 0);
+    return;
+  }
+  erreursDecodeur = 0;
+  if (!sansHevc) {
+    sansHevc = true;
+    reconnecter('Décodage impossible, nouvel essai en H.264…');
+    return;
+  }
+  finVoulue = true;
+  if (ws) ws.close();
+  voile('Safari ne parvient pas à décoder la vidéo du Mac.', reprendre);
+}
+
 function configurer() {
   fermerDecodeur();
-  decodeur = new VideoDecoder({ output: dessiner, error: () => { envoyer({ t: 'image_cle' }); setTimeout(configurer, 0); } });
-  decodeur.configure({
-    codec: config.codec,
-    codedWidth: config.largeur,
-    codedHeight: config.hauteur,
-    description: base64(config.description),
-    optimizeForLatency: true,
-    hardwareAcceleration: 'prefer-hardware',
-  });
+  decodeur = new VideoDecoder({ output: dessiner, error: erreurDecodeur });
   attendreCle = true;
+  try {
+    decodeur.configure({
+      codec: config.codec,
+      codedWidth: config.largeur,
+      codedHeight: config.hauteur,
+      description: base64(config.description),
+      optimizeForLatency: true,
+      hardwareAcceleration: 'prefer-hardware',
+    });
+  } catch {
+    erreurDecodeur();
+  }
 }
 
 function recuImage(tampon) {
@@ -129,6 +178,7 @@ function dessiner(image) {
   ctx.drawImage(image, 0, 0, ecran.width, ecran.height);
   const n = image.timestamp;
   image.close();
+  erreursDecodeur = 0;
   envoyer({ t: 'ack', n });
   mesures.images++;
   const c = captures.get(n);
@@ -151,6 +201,7 @@ function recuTexte(m) {
       disposer();
       configurer();
       sansVoile();
+      envoyer({ t: 'qualite', q: qualite }); // ici et pas avec « bonjour » : le Mac ne lit que « bonjour » à la connexion
       break;
     case 'ping':
       envoyer({ t: 'pong', n: m.n });
@@ -185,8 +236,15 @@ function recuTexte(m) {
 
 const vue = { echelle: 1, tx: 0, ty: 0 };
 
+// La zone visible : sans la partie cachée par le clavier à l'écran.
+function zone() {
+  const v = window.visualViewport;
+  return v ? [v.width, v.height] : [window.innerWidth, window.innerHeight];
+}
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => config && disposer());
+
 function disposer() {
-  const W = window.innerWidth, H = window.innerHeight;
+  const [W, H] = zone();
   const k = Math.min(W / ecran.width, H / ecran.height);
   const l = ecran.width * k, h = ecran.height * k;
   ecran.style.width = `${l}px`;
@@ -197,7 +255,7 @@ function disposer() {
 }
 
 function zoomer(a) {
-  const W = window.innerWidth, H = window.innerHeight;
+  const [W, H] = zone();
   const avant = vue.echelle;
   vue.echelle = Math.min(5, Math.max(1, vue.echelle * a.facteur));
   const f = vue.echelle / avant;
@@ -292,7 +350,7 @@ const dansUnChamp = (cible) => cible !== saisie && cible instanceof HTMLElement 
 document.addEventListener('keydown', (e) => {
   if (!ws || dansUnChamp(e.target) || e.isComposing || !touchesConnues.has(e.code)) return;
   e.preventDefault();
-  if (e.metaKey && e.code === 'KeyV') return collerVersMac(true); // ⌘ est déjà enfoncé sur le Mac
+  if (e.metaKey && e.code === 'KeyV') return collerVersMac();
   if (e.metaKey && (e.code === 'KeyC' || e.code === 'KeyX')) copierVersIPad();
   envoyer({ t: 'touche', code: e.code, bas: true }); // les répétitions aussi : le Mac ne répète pas une touche simulée
 });
@@ -330,7 +388,7 @@ function tapoter(code) {
 window.addEventListener('blur', () => envoyer({ t: 'relacher' }));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) envoyer({ t: 'relacher' });
-  else envoyer({ t: 'image_cle' });
+  else { dernierSignal = performance.now(); envoyer({ t: 'image_cle' }); }
 });
 
 // -- presse-papiers ---------------------------------------------------------------------------
@@ -350,13 +408,13 @@ function copierVersIPad() {
   navigator.clipboard.write([new ClipboardItem({ 'text/plain': texte })]).catch(() => {});
 }
 
-async function collerVersMac(depuisLeClavier) {
+async function collerVersMac() {
   try {
     const t = await Promise.race([navigator.clipboard.readText(), new Promise((_, ko) => setTimeout(ko, 4000))]);
     if (t && t.length <= 1000000) envoyer({ t: 'presse_papiers', texte: t });
   } catch { /* refusé ou vide : on colle ce que le Mac a déjà */ }
-  if (depuisLeClavier) tapoter('KeyV');
-  else envoyer({ t: 'raccourci', mods: ['cmd'], c: 'v' });
+  // le raccourci complet, jamais la touche V seule : ⌘ a pu être relâché pendant la lecture (bulle « Coller » de Safari)
+  envoyer({ t: 'raccourci', mods: ['cmd'], c: 'v' });
 }
 
 // -- barre d'outils ---------------------------------------------------------------------------
@@ -376,7 +434,7 @@ const actions = {
   haut: () => tapoter('ArrowUp'),
   bas: () => tapoter('ArrowDown'),
   copier: () => { copierVersIPad(); envoyer({ t: 'raccourci', mods: ['cmd'], c: 'c' }); },
-  coller: () => collerVersMac(false),
+  coller: () => collerVersMac(),
   zoom: () => { vue.echelle = 1; disposer(); },
   qualite: (b) => {
     qualite = QUALITES[(QUALITES.indexOf(qualite) + 1) % QUALITES.length];

@@ -1,7 +1,7 @@
 // Gestes de l'iPad → actions sur le Mac. Pure (aucun accès à la page) : testée par
 // tests/gestes.test.js. La page lui passe les événements pointeur et reçoit des actions :
 //   {t:'souris', x, y}            position en pixels de la page
-//   {t:'bouton', b, bas}          0 gauche, 1 droit, 2 milieu
+//   {t:'bouton', b, bas, simple}  0 gauche, 1 droit, 2 milieu ; simple : jamais un double clic
 //   {t:'molette', dx, dy}         pixels, sens du navigateur (dy > 0 : le contenu monte)
 //   {t:'clavier'}                 ouvrir ou fermer le clavier à l'écran
 //   {t:'zoom', facteur, cx, cy, dx, dy}   pincement : zoom et déplacement de la vue (iPad seul)
@@ -92,7 +92,7 @@
           if (this.apresToucher) {
             this.mode = 'glisser';
             this.emettre({ t: 'souris', x: this.debut.x, y: this.debut.y });
-            this.emettre({ t: 'bouton', b: 0, bas: true });
+            this.emettre({ t: 'bouton', b: 0, bas: true, simple: true }); // pas un double clic, malgré le toucher d'avant
           } else {
             this.mode = 'curseur';
           }
@@ -125,7 +125,8 @@
       switch (this.mode) {
         case 'un': {
           this.annulerAppuiLong();
-          const { x, y } = this.debut;
+          // deux touchers du doigt tombent rarement au même point : le second clique où le premier a cliqué
+          const { x, y } = this.apresToucher ? this.dernierToucher : this.debut;
           this.emettre({ t: 'souris', x, y });
           this.emettre({ t: 'bouton', b: 0, bas: true });
           this.emettre({ t: 'bouton', b: 0, bas: false });
@@ -205,7 +206,10 @@
       const d = this.ecart();
       if (this.mode === 'deux') {
         if (Math.abs(d / s.d0 - 1) > PINCER) this.mode = 'pincer';
-        else if (distance(c, s.c0) > TOLERANCE) this.mode = 'defiler';
+        else if (distance(c, s.c0) > TOLERANCE) {
+          this.mode = 'defiler';
+          this.emettre({ t: 'souris', x: s.c0.x, y: s.c0.y }); // le Mac fait défiler ce qui est sous son curseur
+        }
         else return;
       }
       const t = this.h.maintenant();

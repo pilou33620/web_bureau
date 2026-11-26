@@ -1,4 +1,4 @@
-//! Copie de web_tools_commun/production.rs (web_suite), sans retouche.
+//! Copie de web_tools_commun/production.rs (web_suite) ; seule retouche : sans les archives zip (Windows).
 //!
 //! La mise à jour sans git d'une copie de production, commune à tous les web tools.
 //!
@@ -25,7 +25,7 @@
 //! Feature cargo `production` (ureq, zip) : les outils qui n'en veulent pas ne les tirent pas.
 
 use std::fs;
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -114,51 +114,13 @@ pub fn telecharger(url: &str, fichier: &Path) -> Result<String, String> {
     essai().map_err(|e| e.to_string())
 }
 
-/// Extrait les entrées de `z` qui commencent par `prefixe` dans `cible`, sans le préfixe.
-/// Une entrée qui sortirait de `cible` (« ../ », chemin absolu, lecteur Windows) est ignorée.
-pub fn extraire<R: Read + Seek>(z: &mut zip::ZipArchive<R>, prefixe: &str, cible: &Path) -> io::Result<()> {
-    let windows = cfg!(windows);
-    for i in 0..z.len() {
-        let mut entree = z.by_index(i)?;
-        let nom = entree.name().to_string();
-        let Some(relatif) = nom.strip_prefix(prefixe).filter(|r| !r.is_empty()) else { continue };
-        // Le chemin remis d'aplomb (normpath) doit rester sous `cible`.
-        let mut morceaux: Vec<&str> = Vec::new();
-        let mut dehors = relatif.starts_with('/');
-        for m in relatif.split(|c| c == '/' || (windows && c == '\\')) {
-            match m {
-                "" | "." => {}
-                ".." => dehors |= morceaux.pop().is_none(),
-                _ => {
-                    dehors |= windows && m.contains(':');
-                    morceaux.push(m);
-                }
-            }
-        }
-        if dehors || morceaux.is_empty() {
-            continue; // entrée hors du dossier : ignorée
-        }
-        let chemin = morceaux.iter().fold(cible.to_path_buf(), |p, m| p.join(m));
-        if nom.ends_with('/') {
-            fs::create_dir_all(&chemin)?;
-        } else {
-            if let Some(parent) = chemin.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            io::copy(&mut entree, &mut fs::File::create(&chemin)?)?;
-        }
-    }
-    Ok(())
-}
-
 /// Décompresse l'archive (zip ou tar.gz) dans `vers`, sans son dossier de tête (mon_outil/…).
 pub fn decompresser(archive: &Path, vers: &Path) -> Result<(), String> {
     let essai = || -> Result<(), Box<dyn std::error::Error>> {
         fs::create_dir_all(vers)?;
         if archive.to_string_lossy().ends_with(".zip") {
-            let mut z = zip::ZipArchive::new(fs::File::open(archive)?)?;
-            let tete = z.name_for_index(0).unwrap_or("").split('/').next().unwrap_or("").to_string();
-            extraire(&mut z, &format!("{}/", tete), vers)?;
+            // web_bureau : macOS seulement, donc tar.gz ; la bibliothèque zip de la caisse est retirée
+            return Err("archive zip non prise en charge".into());
         } else {
             // tar.gz : hors Windows seulement (Linux, macOS), où tar est toujours là
             let ok = Command::new("tar")
@@ -332,15 +294,7 @@ mod essais {
     fn archive(d: &Path) -> Vec<u8> {
         let (_, ext) = systeme().unwrap();
         let fichier = d.join(format!("archive.{}", ext));
-        if ext == "zip" {
-            let mut z = zip::ZipWriter::new(fs::File::create(&fichier).unwrap());
-            let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-            for (nom, corps) in [("outil/bin/outil", "2"), ("outil/index.html", "neuf")] {
-                z.start_file(nom, options).unwrap();
-                z.write_all(corps.as_bytes()).unwrap();
-            }
-            z.finish().unwrap();
-        } else {
+        {
             let source = d.join("source").join("outil");
             fs::create_dir_all(source.join("bin")).unwrap();
             fs::write(source.join("bin").join("outil"), "2").unwrap();

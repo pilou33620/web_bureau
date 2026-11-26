@@ -128,7 +128,7 @@ impl Capture {
             let _: () = msg_send![&*cfg, setPixelFormat: NV12];
             let _: () = msg_send![&*cfg, setMinimumFrameInterval: CMTime::new(1, 60)];
             let _: () = msg_send![&*cfg, setShowsCursor: true];
-            let _: () = msg_send![&*cfg, setQueueDepth: 3isize];
+            let _: () = msg_send![&*cfg, setQueueDepth: 5isize]; // dont une image que le serveur peut garder
             let flux: Allocated<AnyObject> = msg_send![class!(SCStream), alloc];
             let flux: Retained<AnyObject> =
                 msg_send![flux, initWithFilter: &*filtre, configuration: &*cfg, delegate: std::ptr::null_mut::<AnyObject>()];

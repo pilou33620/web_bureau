@@ -9,9 +9,6 @@ pub const CMD: u64 = 0x0010_0000; // kCGEventFlagMaskCommand
 pub const FN: u64 = 0x0080_0000; // kCGEventFlagMaskSecondaryFn
 
 pub const KVK_ENTREE: u16 = 0x24;
-pub const KVK_TAB: u16 = 0x30;
-pub const KVK_ESPACE: u16 = 0x31;
-pub const KVK_EFFACER: u16 = 0x33;
 
 // shortcut: sur un clavier ISO, macOS échange 0x0A et 0x32 (touche à gauche de 1 / touche
 // à côté de Maj gauche) ; si « @ » et « < » sont inversés sur le Mac, échanger ces deux lignes.

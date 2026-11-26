@@ -207,8 +207,9 @@ fn banc() {
     ] {
         assert!(internet(ip(c), ip(i)), "{} {}", c, i);
     }
-    DISTANT.store(false, Ordering::SeqCst); // ce poste : pas de code
-    assert_eq!(get("/", &[]).corps, b"ok");
+    DISTANT.store(false, Ordering::SeqCst); // web_bureau : ce poste aussi doit donner le code
+    assert_eq!(get("/", &[]).code, 303);
+    assert_eq!(get("/", &[("Cookie", biscuit.as_str())]).corps, b"ok");
     assert!(Garde::new("LOCAL", false, None, None).jeton.is_none());
     let lignes: Arc<Mutex<Vec<String>>> = Arc::default();
     let l2 = lignes.clone();
@@ -268,7 +269,7 @@ fn banc() {
     let r = reqs(port, &format!("/?jeton={}", g2.jeton.as_ref().unwrap()), &d.join("ca.pem"));
     assert!(r.entete("Set-Cookie").unwrap().ends_with("; Secure")); // en HTTPS, le cookie ne repart jamais en clair
     DISTANT.store(false, Ordering::SeqCst);
-    assert_eq!(req(port, "GET", "/", &[], "").corps, b"ok"); // la boucle locale garde HTTP
+    assert_eq!(req(port, "GET", "/", &[], "").code, 303); // la boucle locale garde HTTP, mais donne le code comme les autres
     srv.arreter();
 
     // la CA ne signe que des adresses privées
