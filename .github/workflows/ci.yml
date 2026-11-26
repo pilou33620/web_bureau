@@ -18,5 +18,5 @@ jobs:
         shell: bash -o pipefail {0}
       - name: Gestes et syntaxe de la page
         run: |
-          node --test tests/
+          node --test tests/*.test.js
           for f in web/js/*.js; do node --check "$f"; done

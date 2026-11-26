@@ -140,7 +140,7 @@ Port 8803 par défaut (le suivant s'il est pris). `--local` : 127.0.0.1 seulemen
 ## Développement et tests
 
 - Le code s'écrit sur le Pi, qui ne compile pas. La CI GitHub (macOS, Apple Silicon) lance les tests
-  (`cargo test`, `node --test tests/`) et publie l'exécutable signé.
+  (`cargo test`, `node --test tests/*.test.js`) et publie l'exécutable signé.
 - Tests : protocole, trames WebSocket, régulation du débit, fichiers (confinement, liens
   symboliques, envoi coupé), retour arrière des mises à jour, réglages abîmés, refus du serveur
   (CSRF, tailles, Origin), sécurité de l'appairage (tests recopiés de la caisse commune, HTTPS
