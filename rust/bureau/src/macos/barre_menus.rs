@@ -54,7 +54,8 @@ pub fn lancer(couper: impl Fn() + Send + Sync + 'static) -> ! {
         let barre: Retained<AnyObject> = msg_send![class!(NSStatusBar), systemStatusBar];
         let element: Retained<AnyObject> = msg_send![&*barre, statusItemWithLength: -1.0f64];
         let menu: Retained<AnyObject> = msg_send![class!(NSMenu), new];
-        let cible: Retained<Cible> = msg_send![super(Cible::alloc().set_ivars(())), init];
+        let cible = Cible::alloc().set_ivars(());
+        let cible: Retained<Cible> = msg_send![super(cible), init];
         let a: Allocated<AnyObject> = msg_send![class!(NSMenuItem), alloc];
         let item: Retained<AnyObject> =
             msg_send![a, initWithTitle: &*ns_chaine("Couper la session"), action: sel!(couper:), keyEquivalent: &*ns_chaine("")];

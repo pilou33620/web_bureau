@@ -7,6 +7,8 @@ use crate::commun::serveur::Duplex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub static DISTANT: AtomicBool = AtomicBool::new(false);
+/// banc et websocket changent la même variable d'environnement et DISTANT : l'un après l'autre.
+static EN_SERIE: Mutex<()> = Mutex::new(());
 
 struct Rep {
     code: u16,
@@ -80,6 +82,7 @@ fn servir(garde: Arc<Garde>) -> (Arc<Serveur>, u16) {
 
 #[test]
 fn banc() {
+    let _en_serie = EN_SERIE.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = std::env::temp_dir().join(format!("appairage-essai-{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
@@ -318,6 +321,7 @@ fn ouvrir_ws(port: u16, entetes: &[(&str, &str)]) -> (TcpStream, String) {
 
 #[test]
 fn websocket() {
+    let _en_serie = EN_SERIE.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = std::env::temp_dir().join(format!("websocket-essai-{}", std::process::id()));
     fs::create_dir_all(&tmp).unwrap();
     std::env::set_var("WEB_BUREAU_JETON_FICHIER", tmp.join("jeton.txt"));

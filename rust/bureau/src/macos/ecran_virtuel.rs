@@ -29,7 +29,8 @@ impl EcranVirtuel {
     /// Un écran de `largeur` × `hauteur` pixels, en HiDPI (le texte a la taille de celui de l'iPad).
     pub fn creer(largeur: u32, hauteur: u32) -> Result<EcranVirtuel, String> {
         sur_fil_principal_attendre(move || unsafe {
-            let desc: Retained<AnyObject> = msg_send![classe(c"CGVirtualDisplayDescriptor")?, new];
+            let (c_desc, c_ecran) = (classe(c"CGVirtualDisplayDescriptor")?, classe(c"CGVirtualDisplay")?);
+            let desc: Retained<AnyObject> = msg_send![c_desc, new];
             let _: () = msg_send![&*desc, setDispatchQueue: file_principale()];
             let _: () = msg_send![&*desc, setName: &*ns_chaine("web_bureau")];
             let _: () = msg_send![&*desc, setMaxPixelsWide: 7680u32];
@@ -39,7 +40,7 @@ impl EcranVirtuel {
             let _: () = msg_send![&*desc, setProductID: 0x5742u32];
             let _: () = msg_send![&*desc, setVendorID: 0x5742u32];
             let _: () = msg_send![&*desc, setSerialNum: 1u32];
-            let a: Allocated<AnyObject> = msg_send![classe(c"CGVirtualDisplay")?, alloc];
+            let a: Allocated<AnyObject> = msg_send![c_ecran, alloc];
             let objet: Option<Retained<AnyObject>> = msg_send![a, initWithDescriptor: &*desc];
             let objet = objet.ok_or("macOS a refusé l'écran virtuel")?;
             let id: u32 = msg_send![&*objet, displayID];
@@ -60,10 +61,11 @@ impl EcranVirtuel {
     fn appliquer(&mut self, largeur: u32, hauteur: u32) -> Result<(), String> {
         unsafe {
             // le mode est en points ; hiDPI double les pixels
-            let a: Allocated<AnyObject> = msg_send![classe(c"CGVirtualDisplayMode")?, alloc];
+            let (c_mode, c_reglages) = (classe(c"CGVirtualDisplayMode")?, classe(c"CGVirtualDisplaySettings")?);
+            let a: Allocated<AnyObject> = msg_send![c_mode, alloc];
             let mode: Retained<AnyObject> =
                 msg_send![a, initWithWidth: (largeur / 2) as usize, height: (hauteur / 2) as usize, refreshRate: 60.0f64];
-            let reglages: Retained<AnyObject> = msg_send![classe(c"CGVirtualDisplaySettings")?, new];
+            let reglages: Retained<AnyObject> = msg_send![c_reglages, new];
             let _: () = msg_send![&*reglages, setHiDPI: 1u32];
             let modes: Retained<AnyObject> = msg_send![class!(NSArray), arrayWithObject: &*mode];
             let _: () = msg_send![&*reglages, setModes: &*modes];

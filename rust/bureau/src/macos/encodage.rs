@@ -243,7 +243,7 @@ pub fn essai(codec: Codec, largeur: usize, hauteur: usize) -> Result<f64, String
         largeur,
         hauteur,
         20_000_000,
-        Box::new(move |_, image| {
+        Box::new(move |_: u32, image: Option<ImageEncodee>| {
             if image.is_some() {
                 let _ = tx.lock().unwrap().send(Instant::now());
             }

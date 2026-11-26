@@ -217,7 +217,8 @@ fn router(r: &mut Requete) -> Reponse {
     if !r.lecture() && r.entete(ENTETE) != Some("1") {
         return detail(403, "Requête refusée");
     }
-    let resultat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match (r.methode.as_str(), chemin.as_str()) {
+    let methode = r.methode.clone();
+    let resultat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match (methode.as_str(), chemin.as_str()) {
         ("GET", "/ws") => {
             let ip = r.client.ip();
             r.websocket(&[], move |c| session(c, ip))
@@ -492,7 +493,7 @@ fn derouler(
     // encodeur : HEVC si Safari le décode et que la puce l'accepte, sinon H.264
     let rappel = |flux: Arc<Flux>, tx: mpsc::SyncSender<Message>| -> macos::encodage::RappelEncodeur {
         let tx = Mutex::new(tx);
-        Box::new(move |n, image: Option<ImageEncodee>| {
+        Box::new(move |n: u32, image: Option<ImageEncodee>| {
             let tx = verrou(&tx);
             match image {
                 None => verrou(&flux.regulation).oubliee(n),
@@ -529,7 +530,7 @@ fn derouler(
             ecran,
             l,
             h,
-            Box::new(move |image, pts: CMTime| {
+            Box::new(move |image: *mut std::ffi::c_void, pts: CMTime| {
                 let t = Instant::now();
                 // jamais la régulation tenue pendant l'encodage : le rappel de l'encodeur la prend
                 let debit = {
