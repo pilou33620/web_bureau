@@ -1,0 +1,22 @@
+name: essais
+
+# Tests sur un vrai macOS (Apple Silicon) : protocole, trames, régulation, fichiers, retour arrière,
+# sécurité du serveur (jeton, code, Host, Origin, CSRF, HTTPS avec la CA du poste par LibreSSL),
+# et les gestes de la page. Ce qui exige les permissions macOS (capture, souris) ne tourne pas ici :
+# le diagnostic de la page le vérifie sur le Mac.
+on:
+  push:
+  pull_request:
+
+jobs:
+  essais:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tests Rust
+        run: cargo test 2>&1 | tail -n 40
+        shell: bash -o pipefail {0}
+      - name: Gestes et syntaxe de la page
+        run: |
+          node --test tests/
+          for f in web/js/*.js; do node --check "$f"; done

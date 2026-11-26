@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bureau">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icone.png">
+<link rel="stylesheet" href="/css/bureau.css">
+<title>web_bureau</title>
+</head>
+<body>
+<div id="scene"><canvas id="ecran" width="1280" height="800"></canvas></div>
+<div id="anneau"></div>
+<textarea id="saisie" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Saisie vers le Mac"></textarea>
+
+<nav id="barre" aria-label="Outils">
+  <button data-action="clavier" title="Clavier (ou toucher à 3 doigts)">⌨︎</button>
+  <button data-action="cmdtab" title="Changer d'application">⌘⇥</button>
+  <button data-action="mission" title="Mission Control">▦</button>
+  <button data-action="spotlight" title="Spotlight">⌕</button>
+  <button data-action="echap" title="Échap">esc</button>
+  <span class="touches">
+    <button data-action="tab" title="Tab">⇥</button>
+    <button data-action="gauche" title="Gauche">←</button>
+    <button data-action="haut" title="Haut">↑</button>
+    <button data-action="bas" title="Bas">↓</button>
+    <button data-action="droite" title="Droite">→</button>
+  </span>
+  <button data-action="copier" title="Copier depuis le Mac">Copier</button>
+  <button data-action="coller" title="Coller vers le Mac">Coller</button>
+  <button data-action="zoom" title="Vue à 100 %">1:1</button>
+  <button data-action="qualite" title="Qualité">Auto</button>
+  <button data-action="fichiers" title="Fichiers">📁</button>
+  <button data-action="mesures" title="Mesures">📈</button>
+  <button data-action="infos" title="Infos et diagnostic">ⓘ</button>
+  <button data-action="replier" class="replier" title="Replier la barre">⌃</button>
+</nav>
+
+<div id="mesures" hidden></div>
+
+<section id="verrou" class="carte" hidden>
+  <h2>Mac verrouillé</h2>
+  <form id="verrou-form">
+    <input id="verrou-mdp" type="password" autocomplete="current-password" placeholder="Mot de passe du Mac" aria-label="Mot de passe du Mac">
+    <button type="submit">Déverrouiller</button>
+  </form>
+  <p id="verrou-aide" class="aide"></p>
+</section>
+
+<section id="panneau-fichiers" class="panneau carte" hidden>
+  <button class="fermer" aria-label="Fermer">✕</button>
+  <h2>Fichiers du Mac</h2>
+  <p id="fichiers-chemin" class="aide"></p>
+  <ul id="fichiers-liste"></ul>
+  <label class="bouton">Envoyer vers le Mac…<input id="fichiers-envoi" type="file" multiple hidden></label>
+  <p id="fichiers-etat" class="aide"></p>
+</section>
+
+<section id="panneau-infos" class="panneau carte" hidden>
+  <button class="fermer" aria-label="Fermer">✕</button>
+  <h2>Infos</h2>
+  <pre id="infos-diagnostic"></pre>
+  <h3>Tester le déverrouillage depuis l'iPad</h3>
+  <p class="aide">Le Mac se verrouille, puis le mot de passe est tapé à distance. Si macOS refuse, il reste
+    verrouillé : à faire <strong>devant le Mac</strong>. Réussi, le Mac se verrouillera après 15 min sans geste.</p>
+  <form id="essai-form">
+    <input id="essai-mdp" type="password" autocomplete="current-password" placeholder="Mot de passe du Mac" aria-label="Mot de passe du Mac">
+    <label><input id="essai-devant" type="checkbox"> Je suis devant le Mac</label>
+    <button type="submit">Tester</button>
+  </form>
+  <p id="essai-etat" class="aide"></p>
+  <p class="aide">Gestes : toucher = clic · double toucher = double clic · appui long = clic droit ·
+    toucher puis appui maintenu et glisser = glisser-déposer · un doigt = curseur · 2 doigts = défiler
+    (toucher à 2 doigts = clic droit) · pincer = zoom · 3 doigts = clavier.</p>
+</section>
+
+<div id="voile"><p id="voile-texte">Chargement…</p><button id="voile-bouton" hidden></button></div>
+
+<script src="/js/gestes.js"></script>
+<script src="/js/bureau.js"></script>
+</body>
+</html>

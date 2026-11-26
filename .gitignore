@@ -1,0 +1,6 @@
+/target/
+/bin/
+*.local.json
+journaux/
+.maj/
+.maj.*

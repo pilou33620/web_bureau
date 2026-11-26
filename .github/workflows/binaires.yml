@@ -1,0 +1,69 @@
+name: exécutables
+
+# Compile web_bureau pour macOS (Apple Silicon), le signe avec le certificat auto-signé du dépôt
+# (secrets MAC_CERT_P12 et MAC_CERT_MDP : la même signature à chaque version, donc macOS garde les
+# permissions Enregistrement de l'écran et Accessibilité), puis le publie dans « binaires » :
+# - web_bureau-macos-aarch64.tar.gz : l'exécutable seul (scripts/binaires.sh sur un clone) ;
+# - web_bureau-prod-macos-aarch64.tar.gz : la production (exécutable, page, scripts), que le Mac
+#   installe une fois et qui se met ensuite à jour seule.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  compiler:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: cargo build --release
+
+      - name: Signature
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_MDP: ${{ secrets.MAC_CERT_MDP }}
+        run: |
+          mkdir bin
+          cp target/release/web_bureau bin/
+          git rev-parse HEAD > bin/commit
+          if [ -z "$MAC_CERT_P12" ]; then
+            echo "::warning::secret MAC_CERT_P12 absent : signature ad hoc (macOS redemandera les permissions à chaque version)"
+            codesign --force --sign - --identifier fr.pilou.web_bureau bin/web_bureau
+            exit 0
+          fi
+          TROUSSEAU="$RUNNER_TEMP/signature.keychain-db"
+          echo "$MAC_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p ci "$TROUSSEAU"
+          security set-keychain-settings -lut 3600 "$TROUSSEAU"
+          security unlock-keychain -p ci "$TROUSSEAU"
+          security import "$RUNNER_TEMP/cert.p12" -k "$TROUSSEAU" -P "$MAC_CERT_MDP" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$TROUSSEAU" > /dev/null
+          security list-keychains -d user -s "$TROUSSEAU" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          ID=$(security find-identity -p codesigning "$TROUSSEAU" | awk '/web_bureau/ {print $2; exit}')
+          codesign --force --sign "$ID" --keychain "$TROUSSEAU" --identifier fr.pilou.web_bureau bin/web_bureau
+          codesign -dv bin/web_bureau 2>&1 | grep -E "Identifier|Authority|Signature"
+          codesign -d -r- bin/web_bureau 2>&1 | tail -n 1
+
+      - name: Archives
+        run: |
+          tar -czf web_bureau-macos-aarch64.tar.gz -C bin .
+          P=prod/web_bureau
+          mkdir -p $P
+          cp -R bin web scripts $P/
+          cp installer_mac.sh demarrer_WEB_BUREAU.sh README.md $P/
+          tar -czf web_bureau-prod-macos-aarch64.tar.gz -C prod web_bureau
+          for f in web_bureau-*.tar.gz; do shasum -a 256 "$f" | cut -d" " -f1 > "$f.sha256"; done
+
+      - name: Publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view binaires >/dev/null 2>&1 \
+            || gh release create binaires --title "Exécutables" \
+                 --notes "web_bureau pour macOS (Apple Silicon), recompilé et signé à chaque envoi sur main. Installation : décompresser web_bureau-prod-macos-aarch64.tar.gz puis lancer installer_mac.sh (voir README)."
+          gh release upload binaires web_bureau-*.tar.gz web_bureau-*.tar.gz.sha256 --clobber

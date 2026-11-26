@@ -1,0 +1,32 @@
+[package]
+name = "web_bureau"
+version = "0.1.0"
+edition = "2021"
+description = "Prendre le contrôle du Mac depuis l'iPad, dans Safari, sur le réseau local"
+
+[lib]
+name = "bureau"
+path = "src/lib.rs"
+
+[[bin]]
+name = "web_bureau"
+path = "src/bin/web_bureau.rs"
+
+[dependencies]
+# --- celles de la caisse web_tools_commun, recopiée dans src/commun/ ---
+serde_json = { version = "1", features = ["preserve_order"] } # les clés JSON gardent leur ordre
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] } # HTTPS sans bibliothèque C
+rustls-pemfile = "2" # certificats de la CA du poste
+sha2 = "0.10" # empreintes (CA, mises à jour)
+sha1 = "0.10" # Sec-WebSocket-Accept (RFC 6455 impose SHA-1)
+getrandom = "0.2" # jeton et code d'appairage
+base64 = "0.22" # jeton, poignée de main WebSocket, description du flux vidéo
+socket2 = "0.5" # écoute IPv4 + IPv6 sur la même socket
+gethostname = "0.5" # nom du poste (Host permis, certificat)
+chrono = { version = "0.4", default-features = false, features = ["clock"] } # heure du journal
+ureq = "2" # mise à jour sans git (rustls + webpki-roots)
+zip = { version = "2", default-features = false, features = ["deflate"] } # archives de mise à jour (zip)
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6" # appels Objective-C : ScreenCaptureKit, écran virtuel, AppKit
+block2 = "0.6" # blocs de rappel de ScreenCaptureKit

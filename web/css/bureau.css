@@ -1,0 +1,58 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #000; color: #f2f2f7; overflow: hidden;
+  font: 15px/1.4 -apple-system, system-ui, sans-serif; -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; overscroll-behavior: none; }
+#scene { position: fixed; inset: 0; touch-action: none; }
+#ecran { position: absolute; left: 0; top: 0; transform-origin: 0 0; image-rendering: auto; }
+#saisie { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0;
+  font-size: 16px; /* pas de zoom de Safari à la mise au point */ }
+
+#anneau { position: fixed; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%;
+  border: 3px solid rgba(90, 169, 255, .9); pointer-events: none; opacity: 0; transform: scale(.4); }
+#anneau.actif { opacity: 1; transform: scale(1); transition: transform .5s linear, opacity .15s; }
+
+#barre { position: fixed; top: max(6px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+  display: flex; gap: 2px; padding: 4px; border-radius: 14px; background: rgba(28, 28, 30, .82);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); z-index: 10; max-width: calc(100vw - 12px);
+  overflow-x: auto; }
+#barre button, .carte button, .bouton { min-width: 40px; min-height: 36px; padding: 0 10px; border: 0; border-radius: 9px;
+  background: transparent; color: inherit; font: inherit; cursor: pointer; }
+#barre button:active { background: rgba(255, 255, 255, .18); }
+#barre .touches { display: none; gap: 2px; }
+body.clavier-ouvert #barre .touches { display: flex; }
+body.barre-repliee #barre > :not(.replier) { display: none; }
+body.barre-repliee #barre .replier { transform: rotate(180deg); }
+
+#mesures { position: fixed; bottom: max(6px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+  padding: 4px 10px; border-radius: 8px; background: rgba(0, 0, 0, .7); font: 12px ui-monospace, Menlo, monospace;
+  pointer-events: none; z-index: 10; white-space: nowrap; }
+
+.carte { position: fixed; z-index: 20; background: rgba(28, 28, 30, .96); border-radius: 16px; padding: 16px 18px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .5); -webkit-user-select: text; user-select: text; }
+.carte h2 { margin: 0 0 10px; font-size: 18px; }
+.carte h3 { margin: 16px 0 6px; font-size: 15px; }
+.carte input[type=password] { font-size: 16px; padding: 8px 10px; border-radius: 9px; border: 1px solid #48484a;
+  background: #1c1c1e; color: inherit; width: 16rem; max-width: 100%; }
+.carte button, .bouton { background: #0a84ff; color: #fff; display: inline-flex; align-items: center; justify-content: center; }
+.carte .fermer { position: absolute; top: 10px; right: 10px; background: #3a3a3c; min-width: 32px; }
+.aide { color: #a1a1a6; font-size: 13px; margin: 8px 0 0; }
+
+#verrou { left: 50%; top: 30%; transform: translate(-50%, -50%); text-align: center; }
+#verrou form { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+
+.panneau { top: 64px; right: 12px; width: min(28rem, calc(100vw - 24px)); max-height: calc(100vh - 90px); overflow-y: auto; }
+#fichiers-liste { list-style: none; margin: 8px 0 12px; padding: 0; }
+#fichiers-liste li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 4px;
+  border-bottom: 1px solid #3a3a3c; }
+#fichiers-liste li.dossier { cursor: pointer; }
+#fichiers-liste a { color: #5aa9ff; text-decoration: none; overflow-wrap: anywhere; }
+#fichiers-liste span { color: #a1a1a6; white-space: nowrap; }
+#infos-diagnostic { white-space: pre-wrap; font: 13px ui-monospace, Menlo, monospace; background: #1c1c1e;
+  padding: 10px; border-radius: 9px; margin: 0; }
+#essai-form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+
+#voile { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 16px; background: rgba(0, 0, 0, .85); text-align: center; padding: 24px; }
+#voile[hidden], [hidden] { display: none !important; }
+#voile p { font-size: 18px; max-width: 32rem; margin: 0; }
+#voile button { min-height: 44px; padding: 0 22px; border: 0; border-radius: 12px; background: #0a84ff; color: #fff; font: inherit; }

@@ -1,0 +1,10 @@
+{
+  "name": "web_bureau",
+  "short_name": "Bureau",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [{ "src": "/icone.png", "sizes": "180x180", "type": "image/png" }]
+}
