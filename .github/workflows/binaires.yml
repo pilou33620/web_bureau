@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: cargo build --release
+      - run: cargo build --release --locked
 
       - name: Signature
         env:
