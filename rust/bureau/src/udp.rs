@@ -19,7 +19,7 @@ use wtransport::endpoint::IncomingSession;
 use wtransport::tls::{rustls, WEBTRANSPORT_ALPN};
 use wtransport::{Endpoint, ServerConfig, VarInt};
 
-use crate::commun::appairage::globale;
+use crate::commun::appairage::{globale, heure};
 
 type Images = mpsc::UnboundedSender<Vec<u8>>;
 
@@ -118,10 +118,15 @@ async fn accueillir(arrivee: IncomingSession, billets: Arc<Billets>) {
         return arrivee.refuse();
     }
     let Ok(demande) = arrivee.await else { return };
+    let ip = demande.remote_address().ip().to_canonical();
     let Some(liaison) = demande.path().strip_prefix("/udp?b=").and_then(|b| billets.prendre(b)) else {
+        println!("[{}] UDP {ip} : liaison refusée (billet inconnu ou déjà servi)", heure());
         return demande.forbidden().await;
     };
-    let Ok(connexion) = demande.accept().await else { return };
+    let connexion = match demande.accept().await {
+        Ok(c) => c,
+        Err(e) => return println!("[{}] UDP {ip} : liaison échouée ({e})", heure()),
+    };
     let (images, mut suite) = mpsc::unbounded_channel::<Vec<u8>>();
     {
         let mut l = verrou(&liaison);
@@ -130,6 +135,7 @@ async fn accueillir(arrivee: IncomingSession, billets: Arc<Billets>) {
         }
         *l = Liaison::Branchee(images);
     }
+    println!("[{}] UDP {ip} : liaison branchée, la vidéo passe par UDP", heure());
     let connexion = Arc::new(connexion);
     loop {
         tokio::select! {
@@ -145,7 +151,11 @@ async fn accueillir(arrivee: IncomingSession, billets: Arc<Billets>) {
                     }
                 });
             }
-            _ = connexion.closed() => break, // l'iPad est parti : la vidéo repasse par le WebSocket
+            // l'iPad est parti : la vidéo repasse par le WebSocket
+            raison = connexion.closed() => {
+                println!("[{}] UDP {ip} : liaison fermée ({raison})", heure());
+                break;
+            }
         }
     }
     *verrou(&liaison) = Liaison::Finie;

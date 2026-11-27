@@ -85,6 +85,10 @@ Ensuite, débranchez l'écran : web_bureau crée un **écran virtuel** aux propo
   passe par UDP (QUIC), une image par flux : un paquet perdu ne retient que son image, et si elle
   tarde plus de 50 ms la page demande une image qui se décode seule. Sinon, ou si l'UDP est filtré,
   la vidéo passe par le WebSocket comme avant. Souris, clavier et le reste gardent le WebSocket.
+- **Journal** (📜) : tout ce que le serveur du Mac a noté depuis son lancement (sessions, liaison
+  UDP, erreurs, paniques), relu toutes les 2 secondes, avec un bouton Copier. C'est la fin de
+  `~/Library/Logs/web_bureau.log` (128 ko au plus), code d'appairage masqué. Les erreurs de la page
+  (décodeur, WebTransport refusé, erreur de script) y sont ajoutées, en lignes « iPad ».
 - **Infos** (ⓘ) : permissions, écran capturé, temps d'encodage, test du déverrouillage.
 
 ## Sécurité

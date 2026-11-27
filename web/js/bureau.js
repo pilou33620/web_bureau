@@ -132,6 +132,13 @@ function envoyer(m) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
 }
 
+// Les erreurs de la page vont dans le journal du Mac (panneau Journal) : un seul endroit où chercher.
+function noter(texte) {
+  envoyer({ t: 'journal', texte: String(texte).slice(0, 300) });
+}
+window.addEventListener('error', (e) => noter(`erreur de la page : ${e.message} (${String(e.filename).split('/').pop()}:${e.lineno})`));
+window.addEventListener('unhandledrejection', (e) => noter(`promesse rejetée : ${e.reason}`));
+
 // -- vidéo -----------------------------------------------------------------------
 
 function base64(texte) {
@@ -147,7 +154,8 @@ let erreursDecodeur = 0; // de suite, remis à zéro par une image affichée
 let sansHevc = false;
 
 // Trois erreurs de suite : Safari refuse ce flux. On repart en H.264, puis on le dit plutôt que de boucler.
-function erreurDecodeur() {
+function erreurDecodeur(e) {
+  noter(`décodeur vidéo : ${e || 'configuration refusée'}`);
   if (++erreursDecodeur < 3) {
     envoyer({ t: 'image_cle' });
     setTimeout(configurer, 0);
@@ -211,7 +219,7 @@ let udpBranche = false;
 
 async function ouvrirUdp(billet) {
   fermerUdp();
-  if (!('WebTransport' in window)) return;
+  if (!('WebTransport' in window)) return noter('ce Safari n\'a pas WebTransport : la vidéo reste sur le WebSocket');
   let liaison = null;
   try {
     liaison = new WebTransport(`https://${location.host}/udp?b=${billet}`);
@@ -229,7 +237,10 @@ async function ouvrirUdp(billet) {
         recuImage(tampon);
       }, () => { /* flux abandonné */ });
     }
-  } catch { /* WebTransport refusé ou coupé : le Mac envoie la vidéo par le WebSocket */ }
+  } catch (e) {
+    // refusé ou coupé : le Mac envoie la vidéo par le WebSocket. Fermé par nous (udp a changé) : rien à noter
+    if (udp === liaison) noter(`WebTransport ${udpBranche ? 'coupé' : 'refusé'} : ${e}`);
+  }
   if (udp === liaison) fermerUdp();
 }
 
@@ -507,6 +518,7 @@ const actions = {
   reglages: () => basculerPanneau('reglages', () => {}),
   mesures: () => { $('mesures').hidden = !$('mesures').hidden; },
   fichiers: () => basculerPanneau('fichiers', () => ouvrirDossier('')),
+  journal: () => basculerPanneau('journal', lireJournal),
   infos: () => basculerPanneau('infos', diagnostic),
   replier: () => document.body.classList.toggle('barre-repliee'),
 };
@@ -659,6 +671,35 @@ $('essai-form').addEventListener('submit', async (e) => {
   } catch {
     $('essai-etat').textContent = 'Essai impossible.';
   }
+});
+
+// -- journal du serveur ---------------------------------------------------------------------------
+
+async function lireJournal() {
+  const zone = $('journal-texte');
+  let texte;
+  try {
+    const r = await fetch('/api/journal', entete);
+    texte = r.ok ? await r.text() : `Journal indisponible (${r.status}).`;
+  } catch {
+    texte = 'Journal indisponible : le Mac ne répond pas.';
+  }
+  if (texte === zone.textContent) return;
+  // on suit la fin, sauf si l'on est remonté lire plus haut
+  const enBas = zone.scrollHeight - zone.scrollTop - zone.clientHeight < 40;
+  zone.textContent = texte;
+  if (enBas) zone.scrollTop = zone.scrollHeight;
+}
+setInterval(() => { if (!$('panneau-journal').hidden) lireJournal(); }, 2000);
+
+$('journal-copier').addEventListener('click', async (e) => {
+  try {
+    await navigator.clipboard.writeText($('journal-texte').textContent);
+    e.target.textContent = 'Copié';
+  } catch {
+    e.target.textContent = 'Copie refusée par Safari';
+  }
+  setTimeout(() => { e.target.textContent = 'Copier'; }, 2000);
 });
 
 // -- départ -------------------------------------------------------------------------------------------

@@ -36,6 +36,7 @@
   <button data-action="reglages" title="Réglages : résolution, images par seconde, débit">⚙︎</button>
   <button data-action="fichiers" title="Fichiers">📁</button>
   <button data-action="mesures" title="Mesures">📈</button>
+  <button data-action="journal" title="Journal du serveur">📜</button>
   <button data-action="infos" title="Infos et diagnostic">ⓘ</button>
   <button data-action="replier" class="replier" title="Replier la barre">⌃</button>
 </nav>
@@ -89,6 +90,15 @@
     Le débit est un plafond : il baisse seul si le Wi-Fi ne suit pas, puis remonte.
     120 images par seconde : pour un iPad à écran 120 Hz (iPad Pro), après avoir coupé « Prefer Page Rendering
     Updates near 60fps » dans Réglages › Apps › Safari › Avancé › Feature Flags.</p>
+</section>
+
+<section id="panneau-journal" class="panneau carte" hidden>
+  <button class="fermer" aria-label="Fermer">✕</button>
+  <h2>Journal du serveur</h2>
+  <pre id="journal-texte"></pre>
+  <button id="journal-copier">Copier</button>
+  <p class="aide">Tout ce que le serveur du Mac a noté depuis son lancement, erreurs comprises, relu toutes les
+    2 secondes. Les erreurs de cette page y sont ajoutées (lignes « iPad »). Le code d'appairage est masqué.</p>
 </section>
 
 <section id="panneau-infos" class="panneau carte" hidden>

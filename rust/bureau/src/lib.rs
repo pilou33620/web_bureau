@@ -11,6 +11,7 @@
 pub mod clavier;
 pub mod commun;
 pub mod fichiers;
+pub mod journal;
 pub mod maj;
 pub mod protocole;
 pub mod regulation;

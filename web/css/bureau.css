@@ -51,8 +51,10 @@ body.barre-repliee #barre .replier { transform: rotate(180deg); }
 #fichiers-liste li.dossier { cursor: pointer; }
 #fichiers-liste a { color: #5aa9ff; text-decoration: none; overflow-wrap: anywhere; }
 #fichiers-liste span { color: #a1a1a6; white-space: nowrap; }
-#infos-diagnostic { white-space: pre-wrap; font: 13px ui-monospace, Menlo, monospace; background: #1c1c1e;
+#infos-diagnostic, #journal-texte { white-space: pre-wrap; font: 13px ui-monospace, Menlo, monospace; background: #1c1c1e;
   padding: 10px; border-radius: 9px; margin: 0; }
+#panneau-journal { width: min(60rem, calc(100vw - 24px)); }
+#journal-texte { max-height: 55vh; overflow-y: auto; overflow-wrap: anywhere; margin-bottom: 10px; }
 #essai-form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 
 #voile { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center;

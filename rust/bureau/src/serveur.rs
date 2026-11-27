@@ -1,7 +1,7 @@
 //! Le serveur : options, routes, et la session (un WebSocket : vidéo vers l'iPad, entrées vers le
 //! Mac). Modèle : web_royaumes, avec la sécurité recopiée de web_tools_commun (src/commun/).
 
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::net::IpAddr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -16,6 +16,7 @@ use crate::commun::appairage::{self, Garde};
 use crate::commun::production;
 use crate::commun::serveur::{decoder_chemin, Duplex, Reponse, Requete, Serveur};
 use crate::fichiers;
+use crate::journal;
 use crate::macos::capture::Capture;
 use crate::macos::ecran_virtuel::EcranVirtuel;
 use crate::macos::encodage::{Encodeur, ImageEncodee};
@@ -228,6 +229,7 @@ fn router(r: &mut Requete) -> Reponse {
         }
         ("GET", "/api/touches") => Reponse::json(200, &json!(crate::clavier::codes())),
         ("GET", "/api/diagnostic") => api_diagnostic(),
+        ("GET", "/api/journal") => api_journal(),
         ("POST", "/api/diagnostic/deverrouillage") => api_essai_deverrouillage(r),
         ("GET", "/api/fichiers") => api_lister(r),
         ("GET", "/api/fichiers/telecharger") => api_telecharger(r),
@@ -236,6 +238,22 @@ fn router(r: &mut Requete) -> Reponse {
         _ => detail(404, "introuvable"),
     }));
     resultat.unwrap_or_else(|_| detail(500, "erreur interne"))
+}
+
+/// Les notes que la page peut ajouter au journal pendant une session (une page folle ne le remplit pas).
+const NOTES_MAX: u32 = 200;
+
+/// Le journal du serveur : le fichier où launchd range sa sortie (installer_mac.sh).
+fn api_journal() -> Reponse {
+    if io::stdout().is_terminal() {
+        // le fichier serait celui d'un ancien lancement
+        return Reponse::texte(200, "Serveur lancé à la main : son journal est dans le terminal du Mac.");
+    }
+    let chemin = dossier_personnel().join("Library/Logs/web_bureau.log");
+    match journal::fin(&chemin) {
+        Ok(texte) => Reponse::texte(200, &texte),
+        Err(e) => Reponse::texte(200, &format!("Journal illisible ({}) : {e}", chemin.display())),
+    }
 }
 
 fn api_diagnostic() -> Reponse {
@@ -539,6 +557,7 @@ fn derouler(
         .find_map(|codec| Encodeur::nouveau(codec, l, h, ips, debit, rappel(flux.clone(), tx.clone())).ok());
     let Some(encodeur) = encodeur else { return erreur(c, "aucun encodeur matériel pour un codec que Safari décode".into()) };
     let codec_choisi = encodeur.codec;
+    println!("[{}] session {} : encodeur {:?}", appairage::heure(), moi.ip, codec_choisi);
     let chaine_codec = |d: &[u8]| match codec_choisi {
         Codec::Avc => video::codec_avc(d),
         Codec::Hevc => video::codec_hevc(d),
@@ -571,6 +590,7 @@ fn derouler(
         let _ = envoyer_texte(c, &json!({"t": "udp", "billet": p.billet})); // une liaison morte se voit dans la boucle
     }
     let mut precedente = 0u32;
+    let (mut envoyees, mut par_udp, mut cles_demandees, mut notes) = (0u32, 0u32, 0u32, 0u32);
 
     // boucle : images vers l'iPad, entrées vers le Mac
     let _ = c.delai_lecture(Some(Duration::from_millis(1)));
@@ -615,6 +635,8 @@ fn derouler(
                         Some(p) => p.envoyer(corps).err(),
                         None => Some(corps),
                     };
+                    envoyees += 1;
+                    par_udp += reste.is_none() as u32;
                     match reste {
                         Some(corps) => c.write_all(&ws::trame(ws::BINAIRE, &corps)).and_then(|_| c.flush()),
                         None => Ok(()),
@@ -663,7 +685,18 @@ fn derouler(
                 Entree::Raccourci { indicateurs, cible } => verrou(&e.entrees).raccourci(indicateurs, cible),
                 Entree::Relacher => verrou(&e.entrees).relacher(),
                 Entree::Ack { n } => verrou(&flux.regulation).accusee(n, Instant::now()),
-                Entree::ImageCle => flux.image_cle.store(true, Ordering::SeqCst),
+                Entree::ImageCle => {
+                    cles_demandees += 1;
+                    flux.image_cle.store(true, Ordering::SeqCst);
+                }
+                Entree::Journal(note) => {
+                    notes += 1;
+                    if notes <= NOTES_MAX {
+                        println!("[{}] iPad {} : {}", appairage::heure(), moi.ip, note);
+                    } else if notes == NOTES_MAX + 1 {
+                        println!("[{}] iPad {} : (notes suivantes ignorées)", appairage::heure(), moi.ip);
+                    }
+                }
                 Entree::PressePapiers(texte) => {
                     presse_papiers::ecrire(&texte);
                     pp_compteur = presse_papiers::compteur(); // pas d'écho vers l'iPad
@@ -726,6 +759,14 @@ fn derouler(
             break 'boucle "inactivite";
         }
     };
+    println!(
+        "[{}] session {} : {} images envoyées, dont {} par UDP ; {} images clés demandées par l'iPad",
+        appairage::heure(),
+        moi.ip,
+        envoyees,
+        par_udp,
+        cles_demandees
+    );
     drop(capture);
     *verrou(&encodeur) = None;
     raison
