@@ -1,5 +1,6 @@
-//! L'icône de la barre des menus : elle montre que le Mac est contrôlé, et son menu coupe la
-//! session. AppKit veut le fil principal : `lancer` y tourne pour toujours (boucle NSApplication).
+//! L'icône de la barre des menus : elle montre que le Mac est contrôlé, et son menu ouvre les
+//! réglages ou coupe la session. AppKit veut le fil principal : `lancer` y tourne pour toujours
+//! (boucle NSApplication).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
@@ -12,6 +13,7 @@ use super::*;
 
 static ELEMENT: AtomicUsize = AtomicUsize::new(0); // le NSStatusItem, gardé pour toujours
 static COUPER: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+static REGLAGES: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
 define_class!(
     // SAFETY: NSObject n'impose rien à ses sous-classes.
@@ -23,6 +25,13 @@ define_class!(
         #[unsafe(method(couper:))]
         fn couper(&self, _expediteur: *mut AnyObject) {
             if let Some(f) = COUPER.get() {
+                f();
+            }
+        }
+
+        #[unsafe(method(reglages:))]
+        fn reglages(&self, _expediteur: *mut AnyObject) {
+            if let Some(f) = REGLAGES.get() {
                 f();
             }
         }
@@ -46,8 +55,9 @@ pub fn afficher(texte: String) {
 }
 
 /// Pose l'icône puis fait tourner AppKit sur le fil principal ; ne rend jamais la main.
-pub fn lancer(couper: impl Fn() + Send + Sync + 'static) -> ! {
+pub fn lancer(reglages: impl Fn() + Send + Sync + 'static, couper: impl Fn() + Send + Sync + 'static) -> ! {
     let _ = COUPER.set(Box::new(couper));
+    let _ = REGLAGES.set(Box::new(reglages));
     unsafe {
         let app: Retained<AnyObject> = msg_send![class!(NSApplication), sharedApplication];
         let _: bool = msg_send![&*app, setActivationPolicy: 1isize]; // Accessory : ni Dock ni menu
@@ -56,11 +66,13 @@ pub fn lancer(couper: impl Fn() + Send + Sync + 'static) -> ! {
         let menu: Retained<AnyObject> = msg_send![class!(NSMenu), new];
         let cible = Cible::alloc().set_ivars(());
         let cible: Retained<Cible> = msg_send![super(cible), init];
-        let a: Allocated<AnyObject> = msg_send![class!(NSMenuItem), alloc];
-        let item: Retained<AnyObject> =
-            msg_send![a, initWithTitle: &*ns_chaine("Couper la session"), action: sel!(couper:), keyEquivalent: &*ns_chaine("")];
-        let _: () = msg_send![&*item, setTarget: &*cible];
-        let _: () = msg_send![&*menu, addItem: &*item];
+        for (titre, action) in [("Réglages…", sel!(reglages:)), ("Couper la session", sel!(couper:))] {
+            let a: Allocated<AnyObject> = msg_send![class!(NSMenuItem), alloc];
+            let item: Retained<AnyObject> =
+                msg_send![a, initWithTitle: &*ns_chaine(titre), action: action, keyEquivalent: &*ns_chaine("")];
+            let _: () = msg_send![&*item, setTarget: &*cible];
+            let _: () = msg_send![&*menu, addItem: &*item];
+        }
         let _: () = msg_send![&*element, setMenu: &*menu];
         std::mem::forget(cible); // la cible d'un menu n'est pas retenue par lui
         ELEMENT.store(Retained::into_raw(element) as usize, Ordering::SeqCst);

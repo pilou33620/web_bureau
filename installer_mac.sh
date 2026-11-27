@@ -14,7 +14,11 @@ JOURNAL="$HOME/Library/Logs/web_bureau.log"
 # une archive passée par un navigateur porte l'attribut de quarantaine : Gatekeeper bloquerait le lancement
 xattr -dr com.apple.quarantine "$ICI" 2>/dev/null || true
 
-echo "1. Lancement automatique (LaunchAgent $NOM)"
+titre() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+printf '\n\033[1mInstallation de web_bureau\033[0m (4 étapes, environ 2 minutes)\n'
+
+titre "Étape 1/4 · Démarrage automatique"
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 cat > "$PLIST" <<FIN
 <?xml version="1.0" encoding="UTF-8"?>
@@ -36,36 +40,59 @@ FIN
 chmod 600 "$JOURNAL" # il contient le code d'appairage : pas lisible par les autres comptes du Mac
 launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
+echo "   ✓ web_bureau démarrera avec la session et se relancera s'il s'arrête."
 
-echo
-echo "2. Énergie : ni veille ni extinction de l'écran, redémarrage après une coupure de courant (mot de passe administrateur)"
-sudo pmset -a sleep 0 disksleep 0 displaysleep 0 autorestart 1 || echo "   [!] pmset refusé : réglez-le dans Réglages › Économie d'énergie."
+titre "Étape 2/4 · Énergie"
+echo "   Le Mac ne doit jamais se mettre en veille. Tapez le mot de passe du Mac (rien ne s'affiche pendant la frappe) :"
+if sudo pmset -a sleep 0 disksleep 0 displaysleep 0 autorestart 1; then
+  echo "   ✓ Ni veille ni extinction de l'écran ; redémarrage après une coupure de courant."
+else
+  echo "   [!] Refusé : réglez-le dans Réglages Système › Économie d'énergie."
+fi
 
-echo
-echo "3. Permissions : macOS affiche deux demandes pour « web_bureau »."
-echo "   Accordez « Enregistrement de l'écran » et « Accessibilité » dans les Réglages qui s'ouvrent."
+titre "Étape 3/4 · Deux permissions"
+echo "   Les Réglages Système s'ouvrent. Activez « web_bureau » dans les deux listes :"
+echo "     • Confidentialité et sécurité › Enregistrement de l'écran"
+echo "     • Confidentialité et sécurité › Accessibilité"
+echo "   (web_bureau absent de la liste ? bouton +, puis $EXE)"
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture" 2>/dev/null || true
 sleep 2
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
-printf "   Appuyez sur Entrée une fois les deux permissions accordées… "
+printf "   Appuyez sur Entrée quand les deux sont activées… "
 read -r _
 : > "$JOURNAL" # le code du premier lancement ne vaut plus rien : seul celui de la relance doit s'afficher
+# à la relance, web_bureau ouvre sa page de réglages dans le navigateur du Mac
+DONNEES="$HOME/.web_tools/web_bureau"
+mkdir -p "$DONNEES" && : > "$DONNEES/ouvrir-reglages"
 launchctl kickstart -k "gui/$(id -u)/$NOM" # macOS n'applique les permissions qu'au redémarrage du programme
+echo "   ✓ web_bureau relancé avec ses permissions."
 
-echo
-echo "4. Pour un Mac sans écran (à régler une fois dans Réglages Système) :"
-echo "   - Utilisateurs et groupes › Ouverture de session automatique (FileVault doit être désactivé) ;"
-echo "   - Écran verrouillé › « Exiger le mot de passe après l'économiseur d'écran ou l'extinction de l'écran » : Jamais,"
-echo "     et « Lancer l'économiseur d'écran » : Jamais. Sinon macOS verrouille le Mac tout seul. À remettre"
-echo "     seulement quand le test de déverrouillage (page Infos, sur l'iPad) a réussi ;"
-echo "   - Général › Partage › Session à distance (SSH, accès de secours ; ajoutez votre clé dans ~/.ssh/authorized_keys)."
-
-echo
-echo "5. Sur l'iPad : installez la CA du Mac puis entrez le code (valable 10 min)"
+titre "Étape 4/4 · Connecter l'iPad"
 for _ in $(seq 1 30); do
   grep -q "Code d'appairage" "$JOURNAL" 2>/dev/null && break
   sleep 1
 done
-grep -E "https://|Code d'appairage|empreinte|\[X\]|\[!\]" "$JOURNAL" || echo "   [!] Rien dans $JOURNAL : voir « Dépannage » dans README.md."
+if grep -q "Code d'appairage" "$JOURNAL" 2>/dev/null; then
+  echo "   La page « Réglages de web_bureau » vient de s'ouvrir dans le navigateur du Mac."
+  echo "   Suivez « Connecter l'iPad » : trois étapes, avec des QR codes à viser avec l'appareil photo de l'iPad."
+  echo
+  echo "   Vous pourrez la rouvrir à tout moment : icône « web_bureau » dans la barre des menus › Réglages…"
+  ADRESSE=$(grep -Eo "https://[0-9][0-9.]*:[0-9]+/" "$JOURNAL" | grep -v "^https://127\." | head -1)
+  CODE=$(grep "Code d'appairage" "$JOURNAL" | tail -1 | grep -Eo "[0-9]{3} [0-9]{3}")
+  echo
+  echo "   Sans la page : sur l'iPad, ouvrez ${ADRESSE:-https://<adresse du Mac>:8803/} dans Safari"
+  echo "   et saisissez le code ${CODE:-affiché dans le journal} (valable 10 min)."
+else
+  echo "   [!] web_bureau ne répond pas. Ce qu'il a écrit :"
+  sed 's/^/       /' "$JOURNAL" | tail -20
+  echo "       Voir « Dépannage » dans $ICI/README.md."
+fi
+
+titre "Pour laisser le Mac sans écran (à régler une fois dans Réglages Système)"
+echo "   • Utilisateurs et groupes › Ouverture de session automatique (FileVault doit être désactivé)."
+echo "   • Écran verrouillé : « Exiger le mot de passe après l'économiseur d'écran ou l'extinction de"
+echo "     l'écran » sur Jamais, et « Lancer l'économiseur d'écran » sur Jamais. Sinon macOS verrouille"
+echo "     le Mac tout seul. À remettre seulement quand le test de déverrouillage (Infos, sur l'iPad) a réussi."
+echo "   • Général › Partage › Session à distance (SSH) : l'accès de secours, avec votre clé dans ~/.ssh/authorized_keys."
 echo
 echo "Journal : $JOURNAL — désinstaller : launchctl bootout gui/\$(id -u) $PLIST && rm $PLIST"

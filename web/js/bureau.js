@@ -78,7 +78,7 @@ let tailleConnectee = null;
 
 async function connecter() {
   if (!window.isSecureContext && location.hostname !== '127.0.0.1') {
-    voile('Cette page doit être ouverte en https:// (installez la CA du Mac : voir le README).');
+    voile('Cette page doit être ouverte en https://. Sur le Mac : icône web_bureau de la barre des menus › Réglages… › Connecter l\'iPad.');
     return;
   }
   const taille = tailleEcran();
@@ -306,7 +306,7 @@ function recuTexte(m) {
     case 'fin':
       finVoulue = true;
       voile({
-        inactivite: 'Session terminée après 15 minutes sans geste.',
+        inactivite: 'Session terminée : aucun geste pendant le délai réglé sur le Mac.',
         reprise: 'Session reprise par un autre appareil.',
         coupee_sur_mac: 'Session coupée depuis le Mac.',
         message_refuse: 'Session terminée : message refusé par le Mac.',

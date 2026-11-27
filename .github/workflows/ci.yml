@@ -19,4 +19,4 @@ jobs:
       - name: Gestes et syntaxe de la page
         run: |
           node --test tests/*.test.js
-          for f in web/js/*.js; do node --check "$f"; done
+          for f in web/js/*.js web/mac/*.js; do node --check "$f"; done

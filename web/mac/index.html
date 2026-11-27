@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Réglages de web_bureau</title>
+<link rel="stylesheet" href="/mac/mac.css">
+</head>
+<body>
+<header>
+  <h1>web_bureau</h1>
+  <span id="version" class="aide"></span>
+</header>
+<p id="alerte" hidden></p>
+
+<main>
+<section id="connecter">
+  <h2>Connecter l'iPad</h2>
+  <label class="ligne">Adresse du Mac <select id="adresse"></select></label>
+  <ol class="etapes">
+    <li>
+      <h3>1. Installer le certificat <span class="aide">(une seule fois)</span></h3>
+      <img id="qr-ca" width="220" height="220" alt="QR code du certificat">
+      <p>Visez ce code avec l'<b>appareil photo de l'iPad</b> et touchez le lien. Safari propose
+        de télécharger un profil : <b>Autoriser</b>.</p>
+      <p>Puis, dans les <b>Réglages de l'iPad</b> : <b>Profil téléchargé › Installer</b>, puis
+        <b>Général › Informations › Réglages des certificats</b> : activez « web_bureau (CA locale) ».</p>
+      <p class="aide">Empreinte à comparer : <code id="empreinte">–</code></p>
+      <p class="aide">Sans appareil photo, ouvrez dans Safari : <code id="url-ca"></code></p>
+    </li>
+    <li>
+      <h3>2. Appairer l'iPad</h3>
+      <img id="qr-appairage" width="220" height="220" alt="QR code de l'appairage">
+      <p>Visez ce code : la page s'ouvre avec le code déjà saisi, et l'iPad est autorisé.</p>
+      <p class="code" id="code">––– –––</p>
+      <p class="aide" id="code-reste"></p>
+      <p class="aide">Ou ouvrez <code id="url-page"></code> et saisissez le code.</p>
+    </li>
+    <li>
+      <h3>3. En plein écran</h3>
+      <p>Dans Safari : <b>Partager › Sur l'écran d'accueil</b>, puis ouvrez web_bureau depuis
+        l'écran d'accueil de l'iPad.</p>
+      <p class="aide">iPad Pro, 120 images par seconde : Réglages › Apps › Safari › Avancé ›
+        Feature Flags, coupez « Prefer Page Rendering Updates near 60fps ».</p>
+    </li>
+  </ol>
+  <p class="aide">Réservez l'adresse du Mac dans votre box, pour qu'elle ne change pas.</p>
+</section>
+
+<section id="etat">
+  <h2>État</h2>
+  <dl>
+    <dt>Enregistrement de l'écran</dt><dd><span id="perm-ecran">–</span>
+      <button data-permission="ecran" hidden>Ouvrir les Réglages</button></dd>
+    <dt>Accessibilité (souris, clavier)</dt><dd><span id="perm-accessibilite">–</span>
+      <button data-permission="accessibilite" hidden>Ouvrir les Réglages</button></dd>
+    <dt>Écran</dt><dd id="ecran">–</dd>
+    <dt>Vidéo par UDP</dt><dd id="udp">–</dd>
+    <dt>Session</dt><dd><span id="session">–</span> <button id="couper" hidden>Couper la session</button></dd>
+  </dl>
+  <p class="aide" id="aide-permissions" hidden>Une permission vient d'être accordée ? macOS ne l'applique
+    qu'au redémarrage de web_bureau : <button id="relancer-perm">Relancer web_bureau</button></p>
+</section>
+
+<section id="reglages">
+  <h2>Réglages</h2>
+  <label class="ligne">Fin de session sans geste <select id="inactivite"></select></label>
+  <p class="aide">Après ce délai, la session de l'iPad se ferme ; le Mac se verrouille aussi si le
+    déverrouillage depuis l'iPad a été testé (Infos, sur l'iPad).</p>
+  <label class="ligne"><span>Mises à jour automatiques</span> <input id="maj" type="checkbox"></label>
+  <p class="aide">Vérifiées au démarrage puis chaque jour, jamais pendant une session.</p>
+  <h3>Sécurité</h3>
+  <p><button id="revoquer" class="danger">Retirer l'accès à tous les appareils</button></p>
+  <p class="aide">Chaque iPad devra être appairé à nouveau. web_bureau redémarre.</p>
+  <p><button id="relancer">Relancer web_bureau</button></p>
+  <p class="aide" id="reglages-etat" role="status"></p>
+</section>
+
+<section id="journal">
+  <h2>Journal</h2>
+  <pre id="journal-texte"></pre>
+</section>
+</main>
+
+<script src="/mac/mac.js"></script>
+</body>
+</html>

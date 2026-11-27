@@ -25,6 +25,7 @@ socket2 = "0.5" # écoute IPv4 + IPv6 sur la même socket
 gethostname = "0.5" # nom du poste (Host permis, certificat)
 chrono = { version = "0.4", default-features = false, features = ["clock"] } # heure du journal
 ureq = "2" # mise à jour sans git (rustls + webpki-roots)
+qrcode = { version = "0.15", default-features = false, features = ["svg"] } # QR codes des réglages du Mac, pour l'iPad
 # --- vidéo par UDP ---
 wtransport = { version = "0.7", default-features = false, features = ["ring"] } # WebTransport (HTTP/3 sur QUIC), même rustls
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "macros"] } # exécuteur du fil UDP

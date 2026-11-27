@@ -629,6 +629,16 @@ impl Appairage {
         0
     }
 
+    /// web_bureau (page de réglages du Mac) : le code valable et ses secondes restantes, s'il y en a un.
+    pub fn actuel(&self) -> Option<(String, u64)> {
+        let e = self.etat.lock().unwrap();
+        let maintenant = mono();
+        if maintenant < e.bloque || maintenant >= e.expire {
+            return None;
+        }
+        e.code.clone().map(|c| (c, (e.expire - maintenant) as u64))
+    }
+
     /// Renvoie (ok, message).
     pub fn essayer(&self, saisi: &str) -> (bool, String) {
         let saisi: String = saisi.chars().filter(|c| c.is_ascii_digit()).collect();

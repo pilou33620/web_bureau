@@ -3,6 +3,7 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::IpAddr;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde_json::{json, Value};
 
-use crate::commun::appairage::{self, Garde};
+use crate::commun::appairage::{self, Appairage, Garde};
 use crate::commun::production;
 use crate::commun::serveur::{decoder_chemin, Duplex, Reponse, Requete, Serveur};
 use crate::fichiers;
@@ -35,7 +36,8 @@ pub const ENTETE: &str = "X-WEB_BUREAU"; // en-tête maison des écritures (CSRF
 const CORPS_MAX: usize = 4096;
 /// Sans geste pendant ce délai, la session se termine (et le Mac se verrouille si le déverrouillage
 /// depuis l'iPad a été vérifié).
-pub const INACTIVITE: Duration = Duration::from_secs(15 * 60);
+/// Les durées d'inactivité proposées (minutes) ; 15 par défaut.
+pub const INACTIVITES: [u32; 5] = [5, 15, 30, 60, 120];
 const ECRAN_DEFAUT: (u32, u32) = (2266, 1488); // iPad mini A17 Pro, en paysage
 
 const USAGE: &str = "usage : web_bureau [--port N] [--local] [--sans-maj] [--sans-ecran-virtuel] [--nouveau-jeton]
@@ -85,6 +87,9 @@ pub fn lire_args(argv: &[String]) -> Result<Args, String> {
 pub struct Reglages {
     pub deverrouillage_verifie: bool,
     pub ecran: (u32, u32),
+    /// Fin de session après ce nombre de minutes sans geste (une valeur d'INACTIVITES).
+    pub inactivite_min: u32,
+    pub maj_auto: bool,
 }
 
 fn fichier_reglages() -> PathBuf {
@@ -92,7 +97,7 @@ fn fichier_reglages() -> PathBuf {
 }
 
 pub fn lire_reglages(chemin: &Path) -> Reglages {
-    let defaut = Reglages { deverrouillage_verifie: false, ecran: ECRAN_DEFAUT };
+    let defaut = Reglages { deverrouillage_verifie: false, ecran: ECRAN_DEFAUT, inactivite_min: 15, maj_auto: true };
     let Ok(texte) = std::fs::read_to_string(chemin) else { return defaut };
     let v: Value = match serde_json::from_str(&texte) {
         Ok(v @ Value::Object(_)) => v,
@@ -111,6 +116,8 @@ pub fn lire_reglages(chemin: &Path) -> Reglages {
             (Some(l), Some(h)) => (l as u32, h as u32),
             _ => ECRAN_DEFAUT,
         },
+        inactivite_min: v["inactivite_min"].as_u64().map(|m| m as u32).filter(|m| INACTIVITES.contains(m)).unwrap_or(defaut.inactivite_min),
+        maj_auto: v["maj_auto"].as_bool().unwrap_or(defaut.maj_auto),
     }
 }
 
@@ -119,7 +126,12 @@ pub fn ecrire_reglages(chemin: &Path, r: &Reglages) -> io::Result<()> {
         std::fs::create_dir_all(d)?;
     }
     let tmp = chemin.with_extension("json.tmp");
-    let texte = json!({"deverrouillage_verifie": r.deverrouillage_verifie, "ecran": [r.ecran.0, r.ecran.1]});
+    let texte = json!({
+        "deverrouillage_verifie": r.deverrouillage_verifie,
+        "ecran": [r.ecran.0, r.ecran.1],
+        "inactivite_min": r.inactivite_min,
+        "maj_auto": r.maj_auto,
+    });
     std::fs::write(&tmp, format!("{:#}\n", texte))?;
     std::fs::rename(&tmp, chemin)
 }
@@ -143,6 +155,8 @@ static ETAT: OnceLock<Etat> = OnceLock::new();
 static GARDE: OnceLock<Garde> = OnceLock::new();
 /// Les billets de la vidéo par UDP ; absent si l'écoute UDP n'a pas pu s'ouvrir.
 static UDP: OnceLock<Arc<udp::Billets>> = OnceLock::new();
+/// Le port d'écoute, pour les adresses données à l'iPad et au navigateur du Mac.
+static PORT_ECOUTE: OnceLock<u16> = OnceLock::new();
 
 fn etat() -> &'static Etat {
     ETAT.get().expect("état non initialisé")
@@ -214,10 +228,15 @@ fn servir(r: &mut Requete) -> Reponse {
 }
 
 fn router(r: &mut Requete) -> Reponse {
+    let chemin = r.chemin().to_string();
+    // les réglages du Mac ont leur propre accès (navigateur du Mac seulement), avant la garde des appareils
+    if chemin == "/mac" || chemin.starts_with("/mac/") {
+        return std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reglages_mac(r, &chemin)))
+            .unwrap_or_else(|_| detail(500, "erreur interne"));
+    }
     if let Some(rep) = GARDE.get().expect("garde").filtrer(r) {
         return rep;
     }
-    let chemin = r.chemin().to_string();
     if !r.lecture() && r.entete(ENTETE) != Some("1") {
         return detail(403, "Requête refusée");
     }
@@ -801,7 +820,7 @@ fn derouler(
                 }
             }
         }
-        if maintenant - derniere_entree > INACTIVITE {
+        if maintenant - derniere_entree > Duration::from_secs(verrou(&e.reglages).inactivite_min as u64 * 60) {
             break 'boucle "inactivite";
         }
     };
@@ -816,6 +835,243 @@ fn derouler(
     drop(capture);
     *verrou(&encodeur) = None;
     raison
+}
+
+// -- réglages sur le Mac ------------------------------------------------------------------
+// Une page pour le navigateur du Mac (http://127.0.0.1:PORT/mac) : connecter un iPad (QR codes, code
+// d'appairage), état, réglages, journal. Elle montre le code d'appairage : elle n'est permise qu'au
+// navigateur du compte qui fait tourner web_bureau. Il y entre par un billet à usage unique, ouvert
+// par l'icône de la barre des menus (Réglages…) ; jamais par 127.0.0.1 seul, qu'un autre compte du
+// Mac ou un programme quelconque peut joindre.
+
+const BISCUIT_MAC: &str = "web_bureau_mac";
+/// Présent au démarrage : ouvrir la page de réglages (installateur, relance depuis les réglages).
+const DRAPEAU_REGLAGES: &str = "ouvrir-reglages";
+const BILLET_DUREE: Duration = Duration::from_secs(120);
+
+/// Le secret du cookie de la page, propre à ce lancement du serveur.
+static SECRET_MAC: OnceLock<String> = OnceLock::new();
+/// Le billet d'entrée en cours et l'instant où il a été donné.
+static BILLET_MAC: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
+fn alea_hex() -> String {
+    let mut octets = [0u8; 16];
+    getrandom::getrandom(&mut octets).expect("générateur aléatoire du système");
+    octets.iter().map(|o| format!("{o:02x}")).collect()
+}
+
+fn page_entree() -> PathBuf {
+    appairage::fichier_jeton().with_file_name("reglages.html")
+}
+
+/// Ouvre les réglages dans le navigateur du Mac. Le billet passe par un fichier lisible du seul
+/// compte (jamais par la ligne de commande d'`open`, que les autres comptes peuvent lire).
+fn ouvrir_reglages_mac() {
+    let Some(port) = PORT_ECOUTE.get() else { return };
+    let billet = alea_hex();
+    *verrou(&BILLET_MAC) = Some((billet.clone(), Instant::now()));
+    let page = page_entree();
+    let _ = std::fs::remove_file(&page); // le mode 0600 ne s'applique qu'à la création
+    let ecrit = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&page)
+        .and_then(|mut f| {
+            write!(f, "<!doctype html><meta charset=utf-8><title>web_bureau</title><meta http-equiv=refresh content=\"0;url=http://127.0.0.1:{port}/mac/entrer?b={billet}\">")
+        });
+    let ouvert = ecrit.and_then(|_| std::process::Command::new("open").arg(&page).spawn().map(|_| ()));
+    if let Err(e) = ouvert {
+        println!("[!] Réglages : navigateur impossible à ouvrir ({e}).");
+    }
+}
+
+fn couper_session() {
+    if let Some(s) = verrou(&etat().session).as_ref() {
+        *verrou(&s.fin) = Some("coupee_sur_mac");
+    }
+}
+
+/// Relance par launchd (le LaunchAgent relance web_bureau quand il s'arrête), page de réglages rouverte.
+fn relancer(pourquoi: &str) {
+    println!("[{}] {pourquoi} : relance.", appairage::heure());
+    let _ = std::fs::write(appairage::fichier_jeton().with_file_name(DRAPEAU_REGLAGES), "");
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(500)); // la réponse part d'abord
+        std::process::exit(production::CODE_MIS_A_JOUR);
+    });
+}
+
+/// La requête vient-elle du navigateur de ce Mac, sous une adresse qu'une page piégée ne peut pas
+/// faire pointer ici (pas de nom : DNS rebinding) ?
+fn depuis_ce_mac(r: &Requete) -> bool {
+    let port = PORT_ECOUTE.get().copied().unwrap_or(0);
+    let hote = r.entete("Host").unwrap_or("");
+    appairage::deballer(r.client.ip()).is_loopback() && [format!("127.0.0.1:{port}"), format!("localhost:{port}"), format!("[::1]:{port}")].iter().any(|h| h == hote)
+}
+
+fn reglages_mac(r: &mut Requete, chemin: &str) -> Reponse {
+    let refus = |texte: &str| Reponse::texte(403, texte);
+    let rouvrir = "Ouvrez les réglages sur le Mac : icône web_bureau de la barre des menus › Réglages…";
+    if !depuis_ce_mac(r) {
+        return refus(rouvrir);
+    }
+    if r.lecture() && chemin == "/mac/entrer" {
+        let recu = r.param("b").unwrap_or_default();
+        let bon = {
+            let mut billet = verrou(&BILLET_MAC);
+            let valable = billet.as_ref().is_some_and(|(b, t)| t.elapsed() < BILLET_DUREE && appairage::egal(b, &recu));
+            if valable {
+                *billet = None; // usage unique
+            }
+            valable
+        };
+        if !bon {
+            return refus(&format!("Lien périmé. {rouvrir}"));
+        }
+        let _ = std::fs::remove_file(page_entree());
+        let secret = SECRET_MAC.get_or_init(alea_hex);
+        return Reponse::texte(303, "")
+            .entete("Set-Cookie", &format!("{BISCUIT_MAC}={secret}; Path=/mac; HttpOnly; SameSite=Strict"))
+            .entete("Location", "/mac");
+    }
+    let admis = appairage::biscuit_recu(r, BISCUIT_MAC).zip(SECRET_MAC.get()).is_some_and(|(recu, secret)| appairage::egal(&recu, secret));
+    if !admis {
+        return refus(rouvrir);
+    }
+    if !r.lecture() {
+        // CSRF : l'en-tête maison, et l'origine de la page elle-même si le navigateur la donne
+        let ici = format!("{}://{}", if r.https { "https" } else { "http" }, r.entete("Host").unwrap_or(""));
+        if r.entete(ENTETE) != Some("1") || r.entete("Origin").is_some_and(|o| o != ici) {
+            return detail(403, "Requête refusée");
+        }
+    }
+    match (r.methode.as_str(), chemin) {
+        ("GET", "/mac") => fichier_web(&racine().join("web/mac"), "/"),
+        ("GET", "/mac/etat") => api_mac_etat(),
+        ("GET", "/mac/qr.svg") => api_mac_qr(r),
+        ("GET", "/mac/journal") => api_journal(),
+        ("POST", "/mac/reglages") => api_mac_reglages(r),
+        ("POST", "/mac/couper") => {
+            couper_session();
+            Reponse::json(200, &json!({"ok": true}))
+        }
+        ("POST", "/mac/permission") => api_mac_permission(r),
+        ("POST", "/mac/relancer") => {
+            relancer("Relance demandée dans les réglages du Mac");
+            Reponse::json(200, &json!({"ok": true}))
+        }
+        ("POST", "/mac/revoquer") => {
+            // un jeton neuf au redémarrage : tous les cookies des appareils deviennent faux
+            if let Err(e) = std::fs::remove_file(appairage::fichier_jeton()) {
+                return detail(500, &format!("jeton impossible à retirer : {e}"));
+            }
+            relancer("Accès retiré à tous les appareils (réglages du Mac)");
+            Reponse::json(200, &json!({"ok": true}))
+        }
+        ("GET" | "HEAD", c) => fichier_web(&racine().join("web/mac"), &c["/mac".len()..]),
+        _ => detail(404, "introuvable"),
+    }
+}
+
+/// Les adresses du Mac à donner à l'iPad (réseau local et Tailscale), la première par défaut.
+fn adresses_ipad() -> Vec<String> {
+    let mut a: Vec<String> = appairage::adresses_poste().into_iter().filter(|i| !i.starts_with("127.") && i != "::1").collect();
+    // le réseau local d'abord : Tailscale (100.64/10, fd7a:) seulement s'il n'y a rien d'autre
+    a.sort_by_key(|i| i.starts_with("100.") || i.starts_with("fd7a:"));
+    a
+}
+
+fn api_mac_etat() -> Reponse {
+    let e = etat();
+    let (id, virtuel) = ecran_capture();
+    let (l, h) = macos::pixels_ecran(id);
+    let garde = GARDE.get().expect("garde");
+    // un code valable tant que la page est ouverte (il s'en crée un, noté au journal, quand il le faut)
+    let (code, attente) = match &garde.code {
+        Some(c) => match c.preparer() {
+            0 => (c.actuel().map(|(code, reste)| json!({"code": Appairage::lisible(&code), "reste": reste})), 0),
+            attente => (None, attente),
+        },
+        None => (None, 0),
+    };
+    let reglages = verrou(&e.reglages).clone();
+    Reponse::json(
+        200,
+        &json!({
+            "version": crate::VERSION,
+            "port": PORT_ECOUTE.get(),
+            "https": garde.schema() == "https",
+            "adresses": adresses_ipad(),
+            "empreinte": appairage::empreinte_ca().ok(),
+            "code": code,
+            "attente": attente,
+            "session": verrou(&e.session).as_ref().map(|s| s.ip.to_string()),
+            "permissions": {"ecran": macos::permission_ecran(false), "accessibilite": macos::permission_accessibilite(false)},
+            "ecran": {"virtuel": virtuel, "pixels": [l, h]},
+            "udp": UDP.get().is_some(),
+            "reglages": {
+                "inactivite_min": reglages.inactivite_min,
+                "inactivites": INACTIVITES,
+                "maj_auto": reglages.maj_auto,
+                "deverrouillage_verifie": reglages.deverrouillage_verifie,
+            },
+        }),
+    )
+}
+
+/// QR code d'une adresse pour l'appareil photo de l'iPad : le certificat (en http : l'iPad ne lui
+/// fait pas encore confiance) ou la page d'appairage, code compris après « # ».
+fn api_mac_qr(r: &Requete) -> Reponse {
+    let (Some(ip), Some(port)) = (r.param("ip").filter(|ip| adresses_ipad().contains(ip)), PORT_ECOUTE.get()) else {
+        return detail(400, "adresse inconnue");
+    };
+    let hote = appairage::hote_url(&ip);
+    let adresse = match r.param("quoi").as_deref() {
+        Some("ca") => format!("http://{hote}:{port}{}", appairage::CA),
+        Some("appairage") => {
+            let code = GARDE.get().and_then(|g| g.code.as_ref()).and_then(|c| c.actuel());
+            format!("https://{hote}:{port}{}{}", appairage::PAGE, code.map(|(c, _)| format!("#code={c}")).unwrap_or_default())
+        }
+        _ => return detail(400, "QR code inconnu"),
+    };
+    match qrcode::QrCode::new(adresse.as_bytes()) {
+        Ok(qr) => Reponse::new(200, "image/svg+xml", qr.render::<qrcode::render::svg::Color>().min_dimensions(220, 220).build()),
+        Err(e) => detail(500, &format!("QR code impossible : {e}")),
+    }
+}
+
+fn api_mac_reglages(r: &mut Requete) -> Reponse {
+    let Ok(corps) = r.lire_corps(CORPS_MAX) else { return detail(413, "Requête trop grande") };
+    let Ok(Value::Object(v)) = serde_json::from_slice::<Value>(&corps) else { return detail(400, "JSON invalide") };
+    let mut reglages = verrou(&etat().reglages);
+    if let Some(m) = v.get("inactivite_min") {
+        let Some(m) = m.as_u64().map(|m| m as u32).filter(|m| INACTIVITES.contains(m)) else { return detail(400, "durée refusée") };
+        reglages.inactivite_min = m;
+    }
+    if let Some(oui) = v.get("maj_auto") {
+        let Some(oui) = oui.as_bool() else { return detail(400, "maj_auto attend oui ou non") };
+        reglages.maj_auto = oui;
+    }
+    match ecrire_reglages(&fichier_reglages(), &reglages) {
+        Ok(()) => Reponse::json(200, &json!({"ok": true})),
+        Err(e) => detail(500, &format!("réglages impossibles à écrire : {e}")),
+    }
+}
+
+/// Ouvre le volet des Réglages Système où accorder une permission.
+fn api_mac_permission(r: &mut Requete) -> Reponse {
+    let Ok(corps) = r.lire_corps(CORPS_MAX) else { return detail(413, "Requête trop grande") };
+    let volet = match serde_json::from_slice::<Value>(&corps).ok().as_ref().and_then(|v| v["quoi"].as_str()) {
+        Some("ecran") => "Privacy_ScreenCapture",
+        Some("accessibilite") => "Privacy_Accessibility",
+        _ => return detail(400, "permission inconnue"),
+    };
+    let ouvert = std::process::Command::new("open").arg(format!("x-apple.systempreferences:com.apple.preference.security?{volet}")).spawn();
+    match ouvert {
+        Ok(_) => Reponse::json(200, &json!({"ok": true})),
+        Err(e) => detail(500, &format!("Réglages Système impossibles à ouvrir : {e}")),
+    }
 }
 
 // -- lancement -------------------------------------------------------------------------
@@ -844,14 +1100,16 @@ fn mises_a_jour(args: &Args) {
         println!("  Nouvelle version installée : relance.");
         std::process::exit(production::CODE_MIS_A_JOUR); // launchd relance la nouvelle
     };
-    if installer_maj(&exe, decision == maj::Decision::Rien) {
+    // le réglage du Mac (page de réglages), relu à chaque vérification
+    let auto = || ETAT.get().map_or_else(|| lire_reglages(&fichier_reglages()).maj_auto, |e| verrou(&e.reglages).maj_auto);
+    if auto() && installer_maj(&exe, decision == maj::Decision::Rien) {
         relancer();
     }
     // l'outil tourne des semaines sans s'arrêter : revérifier chaque jour, jamais pendant une session
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(24 * 3600));
         attendre_sans_session();
-        if installer_maj(&exe, true) {
+        if auto() && installer_maj(&exe, true) {
             attendre_sans_session();
             relancer();
         }
@@ -946,6 +1204,7 @@ pub fn main() {
         }
     };
     srv.regler_delai(10);
+    let _ = PORT_ECOUTE.set(srv.port());
     if srv.port() != args.port {
         println!("  (le port {} était occupé)", args.port);
     }
@@ -980,11 +1239,11 @@ pub fn main() {
     let _ = io::stdout().flush();
     let s = srv.clone();
     std::thread::spawn(move || s.servir(Arc::new(servir)));
-    barre_menus::lancer(|| {
-        if let Some(s) = verrou(&etat().session).as_ref() {
-            *verrou(&s.fin) = Some("coupee_sur_mac");
-        }
-    });
+    // l'installateur, ou une relance demandée par les réglages, veut la page de réglages à l'écran
+    if std::fs::remove_file(appairage::fichier_jeton().with_file_name(DRAPEAU_REGLAGES)).is_ok() {
+        ouvrir_reglages_mac();
+    }
+    barre_menus::lancer(ouvrir_reglages_mac, couper_session);
 }
 
 #[cfg(test)]
@@ -1014,9 +1273,12 @@ mod essais {
         std::fs::create_dir_all(&d).unwrap();
         let f = d.join("reglages.json");
         assert_eq!(lire_reglages(&f).ecran, ECRAN_DEFAUT);
-        let r = Reglages { deverrouillage_verifie: true, ecran: (2420, 1668) };
+        let r = Reglages { deverrouillage_verifie: true, ecran: (2420, 1668), inactivite_min: 60, maj_auto: false };
         ecrire_reglages(&f, &r).unwrap();
         assert_eq!(lire_reglages(&f), r);
+        // une durée hors liste (fichier retouché à la main) revient à 15 min
+        std::fs::write(&f, r#"{"inactivite_min": 7, "maj_auto": false}"#).unwrap();
+        assert_eq!((lire_reglages(&f).inactivite_min, lire_reglages(&f).maj_auto), (15, false));
         std::fs::write(&f, "{abîmé").unwrap();
         assert_eq!(lire_reglages(&f).deverrouillage_verifie, false);
         assert!(d.join("reglages.abime.json").exists());
@@ -1036,6 +1298,49 @@ mod essais {
             assert_eq!(fichier_web(&web, chemin).code, code, "{chemin}");
         }
         assert_eq!(nom_telechargement("été 1.pdf"), "attachment; filename*=UTF-8''%C3%A9t%C3%A9%201.pdf");
+    }
+
+    /// La page de réglages du Mac montre le code d'appairage : billet, cookie, Host et origine.
+    #[test]
+    fn reglages_du_mac_fermes() {
+        let srv = Serveur::ouvrir(0, false, 1).unwrap();
+        srv.servir_en_fond(Arc::new(servir));
+        let port = srv.port();
+        let _ = PORT_ECOUTE.set(port);
+        let req = |brut: String| {
+            let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            c.write_all(brut.as_bytes()).unwrap();
+            let mut r = String::new();
+            let _ = c.read_to_string(&mut r);
+            r
+        };
+        let code = |r: &str| r.split(' ').nth(1).unwrap_or("").to_string();
+        let ici = format!("Host: 127.0.0.1:{port}\r\n");
+        let tete = |ligne: &str, extra: &str| format!("{ligne} HTTP/1.1\r\n{ici}{extra}\r\n");
+        // 127.0.0.1 seul ne suffit pas : ni la page, ni le journal, ni une écriture
+        assert_eq!(code(&req(tete("GET /mac", ""))), "403");
+        assert_eq!(code(&req(tete("GET /mac/journal", ""))), "403");
+        assert_eq!(code(&req(tete("POST /mac/revoquer", "X-WEB_BUREAU: 1\r\nContent-Length: 0\r\n"))), "403");
+        // billet faux, puis billet bon : un cookie, une seule fois
+        *verrou(&BILLET_MAC) = Some(("b".repeat(32), Instant::now()));
+        assert_eq!(code(&req(tete(&format!("GET /mac/entrer?b={}", "a".repeat(32)), ""))), "403");
+        let r = req(tete(&format!("GET /mac/entrer?b={}", "b".repeat(32)), ""));
+        assert_eq!(code(&r), "303", "{r}");
+        let biscuit = r.lines().find_map(|l| l.strip_prefix("Set-Cookie: ")).unwrap().split(';').next().unwrap().to_string();
+        assert!(biscuit.starts_with("web_bureau_mac="));
+        assert_eq!(code(&req(tete(&format!("GET /mac/entrer?b={}", "b".repeat(32)), ""))), "403", "billet à usage unique");
+        let avec = format!("Cookie: {biscuit}\r\n");
+        assert_eq!(code(&req(tete("GET /mac/journal", &avec))), "200");
+        // un nom d'hôte (DNS rebinding) ou un faux cookie : refusés, même avec le bon cookie pour le premier
+        assert_eq!(code(&req(format!("GET /mac/journal HTTP/1.1\r\nHost: piege.exemple:{port}\r\n{avec}\r\n"))), "403");
+        assert_eq!(code(&req(tete("GET /mac/journal", "Cookie: web_bureau_mac=faux\r\n"))), "403");
+        // écritures : en-tête maison et même origine
+        let corps = r#"{"inactivite_min":30}"#;
+        let longueur = format!("Content-Length: {}\r\n", corps.len());
+        assert_eq!(code(&req(tete("POST /mac/reglages", &format!("{avec}{longueur}")) + corps)), "403");
+        let piege = format!("{avec}X-WEB_BUREAU: 1\r\nOrigin: http://piege.exemple\r\n{longueur}");
+        assert_eq!(code(&req(tete("POST /mac/reglages", &piege) + corps)), "403");
+        srv.arreter();
     }
 
     /// Un vrai serveur sur la boucle locale (garde inactive comme en --local) : les refus des

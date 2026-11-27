@@ -25,7 +25,8 @@ L'installateur :
    (`pmset`, mot de passe administrateur) ;
 3. ouvre les Réglages pour **Enregistrement de l'écran** et **Accessibilité** (à accorder à
    « web_bureau ») ;
-4. affiche les adresses, l'empreinte de la CA et le **code d'appairage**.
+4. ouvre la page **Réglages de web_bureau** dans le navigateur du Mac (voir plus bas), qui guide la
+   connexion de l'iPad avec des QR codes.
 
 À régler à la main pour un Mac sans écran :
 
@@ -40,15 +41,32 @@ L'installateur :
 
 Ensuite, débranchez l'écran : web_bureau crée un **écran virtuel** aux proportions de l'iPad.
 
-## Sur l'iPad
+## Réglages sur le Mac
 
-1. Ouvrez `https://<IP du Mac>:8803/appairage/ca.pem` et installez le profil (Réglages › Profil
-   téléchargé), puis activez-le dans Réglages › Général › Informations › Réglages des certificats.
-   Comparez l'empreinte avec celle de l'installateur.
-2. Ouvrez `https://<IP du Mac>:8803/` et saisissez le code à 6 chiffres. Le cookie dure un an.
-3. Partager › **Sur l'écran d'accueil** : en plein écran, sans barre d'adresse, et Safari ne prend
-   plus ⌘T, ⌘W, ⌘L ni ⌘R. Coupez aussi les gestes de multitâche à 4-5 doigts
-   (Réglages › Multitâche et gestes).
+Icône **web_bureau** de la barre des menus › **Réglages…** : une page s'ouvre dans le navigateur du Mac
+(`http://127.0.0.1:8803/mac`). Visible aussi depuis l'iPad pendant une session, puisque c'est l'écran
+du Mac.
+
+- **Connecter l'iPad**, en trois étapes avec QR codes à viser avec l'appareil photo de l'iPad :
+  1. le certificat : Safari propose le profil, à installer (Réglages › Profil téléchargé) puis à
+     activer (Général › Informations › Réglages des certificats) ; l'empreinte est affichée pour
+     comparer ;
+  2. l'appairage : le QR code ouvre la page avec le code déjà saisi (le code est aussi affiché en
+     grand, avec l'adresse, pour le taper) ;
+  3. Partager › **Sur l'écran d'accueil** : en plein écran, sans barre d'adresse, et Safari ne prend
+     plus ⌘T, ⌘W, ⌘L ni ⌘R. Coupez aussi les gestes de multitâche à 4-5 doigts (Réglages ›
+     Multitâche et gestes).
+- **État** : permissions (avec un bouton vers les Réglages Système), écran, vidéo par UDP, session en
+  cours (et « Couper la session »).
+- **Réglages** : fin de session sans geste (5 min à 2 h, 15 min par défaut), mises à jour
+  automatiques, **retirer l'accès à tous les appareils**, relancer web_bureau.
+- **Journal** du serveur.
+
+La page montre le code d'appairage : seul le navigateur du compte qui fait tourner web_bureau y entre,
+par un billet à usage unique que donne le menu Réglages… (127.0.0.1 seul ne suffit pas). Elle ne
+répond qu'aux adresses `127.0.0.1`, `localhost` et `[::1]` (protection DNS rebinding), et ses
+écritures exigent l'en-tête maison et la même origine. Après un redémarrage de web_bureau, rouvrez-la
+par le menu.
 
 ## Utilisation
 
@@ -113,7 +131,7 @@ Un appareil appairé contrôle **tout** le Mac. Ce qui protège l'accès :
 - chaque message de l'iPad est validé : position dans l'image, touche connue, tailles bornées. Un
   message invalide ferme la session ;
 - **icône dans la barre des menus** pendant une session, avec un menu « Couper la session » ;
-- **fin de session après 15 min sans geste**. Le Mac se verrouille alors aussi, si le
+- **fin de session sans geste** (15 min par défaut, réglable sur le Mac). Le Mac se verrouille alors aussi, si le
   déverrouillage depuis l'iPad a été vérifié (Infos › Tester, devant le Mac). Sinon, la session se
   termine sans verrouiller, pour ne jamais enfermer un Mac sans écran ;
 - jamais de jeton, de mot de passe, de texte copié ni de frappe dans le journal.

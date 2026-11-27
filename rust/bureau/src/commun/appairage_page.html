@@ -35,9 +35,8 @@
 <main>
   <div class="nom">__NOM__</div>
   <h1>Code d'appairage</h1>
-  <p>Saisissez le code à 6 chiffres affiché dans le terminal du serveur (ou dans les logs
-     de ce tool, dans WEB·SUITE). Cet appareil s'en souviendra ensuite,
-     pour tous les web tools de ce serveur.</p>
+  <p>Saisissez le code à 6 chiffres affiché sur le Mac, dans les réglages de web_bureau
+     (icône web_bureau de la barre des menus › Réglages…). Cet appareil s'en souviendra ensuite.</p>
   <form id="f" autocomplete="off">
     <input id="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="7"
            autocomplete="one-time-code" placeholder="000 000" aria-label="Code d'appairage" autofocus>
@@ -47,7 +46,7 @@
   <p id="ca" hidden>Connexion chiffrée. Le navigateur vous a averti ? Installez une fois
      <a href="/appairage/ca.pem">le certificat de ce poste</a> (iPad : Réglages › Profil
      téléchargé, puis Général › Informations › Réglages des certificats). Comparez son
-     empreinte SHA-256 avec celle du terminal.</p>
+     empreinte SHA-256 avec celle des réglages de web_bureau sur le Mac.</p>
 </main>
 <script>
 const champ = document.getElementById('code'), etat = document.getElementById('etat');
@@ -84,6 +83,14 @@ champ.addEventListener('input', () => {
   champ.value = c.length > 3 ? c.slice(0, 3) + ' ' + c.slice(3) : c;
   if (c.length === 6) valider();
 });
+// web_bureau : le QR code des réglages du Mac porte le code après « # » (jamais envoyé au serveur) ;
+// il quitte aussitôt l'adresse, donc ni l'historique ni un lien recopié ne le gardent
+const recu = /^#code=(\d{6})$/.exec(location.hash);
+if (recu) {
+  history.replaceState(null, '', location.pathname);
+  champ.value = recu[1].slice(0, 3) + ' ' + recu[1].slice(3);
+  valider();
+}
 </script>
 </body>
 </html>
