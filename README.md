@@ -77,9 +77,9 @@ Ensuite, débranchez l'écran : web_bureau crée un **écran virtuel** aux propo
   - images par seconde : 30, 60 ou 120. 120 ne se voit que sur un iPad à écran 120 Hz (iPad Pro), et
     seulement après avoir coupé « Prefer Page Rendering Updates near 60fps » dans Réglages › Apps ›
     Safari › Avancé › Feature Flags ; l'écran virtuel du Mac passe alors à 120 Hz ;
-  - débit : automatique (celui que Moonlight conseille : 10 Mb/s en 720p, 20 en 1080p, 36 pour
-    l'iPad mini, 40 en 1440p, 80 en 4K, à 60 images par seconde ; la moitié à 30), ou de 0,5 à
-    150 Mb/s. C'est un plafond : le débit baisse seul si le Wi-Fi ne suit pas.
+  - débit : automatique (celui que Moonlight conseille : 10 Mb/s en 720p, 20 en 1080p, 40 en 1440p,
+    80 en 4K, environ 43 pour l'écran d'un iPad Pro 11 pouces et 57 pour un 13 pouces, à 60 images
+    par seconde ; la moitié à 30, 1,4 fois plus à 120), ou de 0,5 à 150 Mb/s. C'est un plafond : le débit baisse seul si le Wi-Fi ne suit pas.
 - **Mesures** (📈) : codec, images/s, débit, latence de la capture à l'écran.
 - **Infos** (ⓘ) : permissions, écran capturé, temps d'encodage, test du déverrouillage.
 
