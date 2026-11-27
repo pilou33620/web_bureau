@@ -56,9 +56,8 @@ Ensuite, débranchez l'écran : web_bureau crée un **écran virtuel** aux propo
 |---|---|
 | Toucher | clic gauche à l'endroit touché |
 | Double toucher | double clic |
-| Appui long (½ s) | clic droit |
-| Toucher puis appui maintenu et glisser | glisser-déposer |
-| Un doigt qui glisse | déplace le curseur |
+| Un doigt qui glisse | glisser, bouton gauche tenu (déplacer une fenêtre, sélectionner du texte) |
+| Appui long immobile (0,65 s) | clic droit |
 | Toucher à 2 doigts | clic droit |
 | Glisser à 2 doigts | défilement (avec inertie) |
 | Pincer | zoom de la vue sur l'iPad (« 1:1 » pour revenir) |
@@ -71,7 +70,14 @@ Ensuite, débranchez l'écran : web_bureau crée un **écran virtuel** aux propo
   l'iPad sur le Mac. Les boutons Copier et Coller font de même au tactile.
 - **Fichiers** (📁) : parcourir le dossier personnel du Mac et télécharger, ou envoyer des fichiers
   dans `~/Downloads/web_bureau` (2 Go au plus par fichier).
-- **Qualité** : Auto (30 Mb/s au plus), Économe (8), Max (60). Le débit s'adapte au Wi-Fi.
+- **Réglages** (⚙︎), ceux de Moonlight, gardés sur l'iPad :
+  - résolution : l'écran de l'iPad (par défaut), 720p, 1080p, 1440p ou 4K. 720p et 1440p donnent un
+    bureau de 1280 × 720 points, 1080p et 4K un bureau de 1920 × 1080 points ; 1440p et 4K sont en
+    Retina ;
+  - images par seconde : 30 ou 60 ;
+  - débit : automatique (celui que Moonlight conseille : 10 Mb/s en 720p, 20 en 1080p, 36 pour
+    l'iPad mini, 40 en 1440p, 80 en 4K, à 60 images par seconde ; la moitié à 30), ou de 0,5 à
+    150 Mb/s. C'est un plafond : le débit baisse seul si le Wi-Fi ne suit pas.
 - **Mesures** (📈) : codec, images/s, débit, latence de la capture à l'écran.
 - **Infos** (ⓘ) : permissions, écran capturé, temps d'encodage, test du déverrouillage.
 

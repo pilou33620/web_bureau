@@ -1,22 +1,26 @@
 // Gestes de l'iPad → actions sur le Mac. Pure (aucun accès à la page) : testée par
 // tests/gestes.test.js. La page lui passe les événements pointeur et reçoit des actions :
 //   {t:'souris', x, y}            position en pixels de la page
-//   {t:'bouton', b, bas, simple}  0 gauche, 1 droit, 2 milieu ; simple : jamais un double clic
+//   {t:'bouton', b, bas}          0 gauche, 1 droit, 2 milieu
 //   {t:'molette', dx, dy}         pixels, sens du navigateur (dy > 0 : le contenu monte)
 //   {t:'clavier'}                 ouvrir ou fermer le clavier à l'écran
 //   {t:'zoom', facteur, cx, cy, dx, dy}   pincement : zoom et déplacement de la vue (iPad seul)
 //   {t:'anneau', x, y, actif}     retour visuel de l'appui long
 //
-// Tactile : toucher = clic gauche ; double toucher = double clic ; appui long immobile = clic
-// droit ; toucher puis appui maintenu et glisser = glisser-déposer ; un doigt qui glisse =
-// curseur ; toucher à 2 doigts = clic droit ; glisser à 2 doigts = défilement (avec inertie) ;
-// pincer = zoom de la vue ; toucher à 3 doigts = clavier.
+// Tactile, comme le mode « écran tactile » de Moonlight (AbsoluteTouchHandler) : toucher = clic
+// gauche là où est le doigt ; un doigt qui glisse = glisser, bouton gauche tenu ; appui long
+// immobile = clic droit ; un second toucher tout près et tout de suite clique au même point
+// (double clic). Le bouton gauche ne s'enfonce qu'au premier mouvement ou au lever du doigt, et
+// pas dès le contact comme dans Moonlight : sinon un appui long ou un geste à 2 doigts cliquerait.
+// En plus de Moonlight : toucher à 2 doigts = clic droit ; glisser à 2 doigts = défilement (avec
+// inertie) ; pincer = zoom de la vue ; toucher à 3 doigts = clavier.
 (function (racine) {
   'use strict';
 
-  const APPUI_LONG = 500; // ms
+  // les valeurs de Moonlight ; ses distances (1 % et 2,5 % de la vue) font 10 et 30 px sur un iPad
+  const APPUI_LONG = 650; // ms
   const TOLERANCE = 10; // px : en deçà, le doigt n'a pas bougé
-  const DOUBLE = 300; // ms entre deux touchers
+  const DOUBLE = 250; // ms : un toucher plus tôt et à moins de 3 × TOLERANCE clique au point du précédent
   const TOUCHER_MAX = 300; // ms : au-delà, ce n'est plus un toucher à 2 ou 3 doigts
   const PINCER = 0.12; // écart relatif des doigts qui fait un pincement
   const BOUTONS = { 0: 0, 2: 1, 1: 2 }; // bouton du navigateur → le nôtre
@@ -36,8 +40,9 @@
       this.doigts = new Map(); // id → {x, y, x0, y0}
       this.mode = null;
       this.debut = null; // {x, y, t} du premier doigt
+      this.premier = null; // son identifiant : lui seul mène le curseur
+      this.clic = null; // {x, y} où le bouton s'enfonce (le point du toucher d'avant, s'il est tout proche)
       this.dernierToucher = null; // {x, y, t} du dernier toucher fini
-      this.apresToucher = false;
       this.minuteur = null;
       this.inertie = null;
       this.boutonsTenus = new Map(); // pointeur souris/stylet → bouton enfoncé
@@ -59,8 +64,9 @@
       if (n === 1) {
         this.mode = 'un';
         this.debut = { x: e.x, y: e.y, t };
+        this.premier = e.id;
         const d = this.dernierToucher;
-        this.apresToucher = !!d && t - d.t < DOUBLE && distance(d, e) < 3 * TOLERANCE;
+        this.clic = d && t - d.t < DOUBLE && distance(d, e) < 3 * TOLERANCE ? { x: d.x, y: d.y } : { x: e.x, y: e.y };
         this.emettre({ t: 'anneau', x: e.x, y: e.y, actif: true });
         this.minuteur = this.h.plusTard(() => this.appuiLong(), APPUI_LONG);
       } else if (n === 2 && this.mode === 'un') {
@@ -89,18 +95,13 @@
         case 'un':
           if (distance(this.debut, e) <= TOLERANCE) return;
           this.annulerAppuiLong();
-          if (this.apresToucher) {
-            this.mode = 'glisser';
-            this.emettre({ t: 'souris', x: this.debut.x, y: this.debut.y });
-            this.emettre({ t: 'bouton', b: 0, bas: true, simple: true }); // pas un double clic, malgré le toucher d'avant
-          } else {
-            this.mode = 'curseur';
-          }
+          this.mode = 'glisser';
+          this.emettre({ t: 'souris', x: this.clic.x, y: this.clic.y });
+          this.emettre({ t: 'bouton', b: 0, bas: true });
           this.emettre({ t: 'souris', x: e.x, y: e.y });
           return;
-        case 'curseur':
         case 'glisser':
-          this.emettre({ t: 'souris', x: e.x, y: e.y });
+          if (e.id === this.premier) this.emettre({ t: 'souris', x: e.x, y: e.y }); // un doigt posé en plus ne déplace rien
           return;
         case 'deux':
         case 'defiler':
@@ -126,7 +127,7 @@
         case 'un': {
           this.annulerAppuiLong();
           // deux touchers du doigt tombent rarement au même point : le second clique où le premier a cliqué
-          const { x, y } = this.apresToucher ? this.dernierToucher : this.debut;
+          const { x, y } = this.clic;
           this.emettre({ t: 'souris', x, y });
           this.emettre({ t: 'bouton', b: 0, bas: true });
           this.emettre({ t: 'bouton', b: 0, bas: false });
@@ -134,8 +135,10 @@
           break;
         }
         case 'glisser':
-          this.emettre({ t: 'bouton', b: 0, bas: false });
-          this.dernierToucher = null;
+          if (reste === 0) {
+            this.emettre({ t: 'bouton', b: 0, bas: false });
+            this.dernierToucher = null;
+          }
           break;
         case 'deux':
           if (reste === 0 && t - this.deux.t < TOUCHER_MAX) {
@@ -172,8 +175,8 @@
       this.minuteur = null;
       if (this.mode !== 'un') return;
       this.mode = 'long';
-      const { x, y } = this.debut;
-      this.emettre({ t: 'anneau', x, y, actif: false });
+      const { x, y } = this.clic;
+      this.emettre({ t: 'anneau', x: this.debut.x, y: this.debut.y, actif: false });
       this.emettre({ t: 'souris', x, y });
       this.emettre({ t: 'bouton', b: 1, bas: true });
       this.emettre({ t: 'bouton', b: 1, bas: false });

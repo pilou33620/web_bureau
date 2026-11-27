@@ -14,7 +14,30 @@ let decodeur = null;
 let config = null;
 let attendreCle = true;
 let touchesConnues = new Set();
-let qualite = 'auto';
+
+// -- réglages (ceux de Moonlight), gardés sur cet iPad -----------------------------
+
+const RESOLUTIONS = { 720: [1280, 720], 1080: [1920, 1080], 1440: [2560, 1440], 2160: [3840, 2160] };
+const DEBITS = [0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 18, 20, 30, 40, 50, 60, 70, 80, 100, 120, 150]; // Mb/s : les crans de Moonlight
+for (const d of DEBITS) $('reglage-debit').add(new Option(`${String(d).replace('.', ',')} Mb/s`, d * 1000));
+
+const champsReglages = [...document.querySelectorAll('#panneau-reglages select')];
+const reglage = (nom) => champsReglages.find((c) => c.name === nom).value;
+{
+  let gardes = {};
+  try { gardes = JSON.parse(localStorage.getItem('web_bureau_reglages')) || {}; } catch { /* réglages par défaut */ }
+  for (const c of champsReglages) {
+    const defaut = c.value;
+    c.value = gardes[c.name];
+    if (c.selectedIndex < 0) c.value = defaut; // valeur absente ou inconnue
+    c.addEventListener('change', () => {
+      try {
+        localStorage.setItem('web_bureau_reglages', JSON.stringify(Object.fromEntries(champsReglages.map((x) => [x.name, x.value]))));
+      } catch { /* navigation privée : le réglage vaut pour cette page */ }
+      if (ws) reconnecter('Nouveaux réglages…');
+    });
+  }
+}
 
 // -- voile (messages plein écran) ------------------------------------------------
 
@@ -31,6 +54,8 @@ const reprendre = { texte: 'Reprendre', action: () => { sansVoile(); connecter()
 // -- connexion -------------------------------------------------------------------
 
 function tailleEcran() {
+  const choisie = RESOLUTIONS[reglage('resolution')];
+  if (choisie) return choisie;
   const r = window.devicePixelRatio || 1;
   const pair = (n) => Math.min(8192, Math.max(320, Math.round(n * r))) & ~1;
   return [pair(window.innerWidth), pair(window.innerHeight)];
@@ -69,7 +94,7 @@ async function connecter() {
   ws = moi;
   dernierSignal = performance.now() + 10000; // le Mac peut mettre quelques secondes à lancer la capture
   moi.binaryType = 'arraybuffer';
-  moi.onopen = () => { tailleConnectee = taille; envoyer({ t: 'bonjour', ecran: taille, codecs }); };
+  moi.onopen = () => { tailleConnectee = taille; envoyer({ t: 'bonjour', ecran: taille, codecs, ips: +reglage('ips'), debit: +reglage('debit') }); };
   moi.onmessage = (ev) => {
     dernierSignal = performance.now();
     if (typeof ev.data === 'string') recuTexte(JSON.parse(ev.data));
@@ -201,7 +226,6 @@ function recuTexte(m) {
       disposer();
       configurer();
       sansVoile();
-      envoyer({ t: 'qualite', q: qualite }); // ici et pas avec « bonjour » : le Mac ne lit que « bonjour » à la connexion
       break;
     case 'ping':
       envoyer({ t: 'pong', n: m.n });
@@ -419,8 +443,6 @@ async function collerVersMac() {
 
 // -- barre d'outils ---------------------------------------------------------------------------
 
-const QUALITES = ['auto', 'econome', 'maximum'];
-const NOMS_QUALITE = { auto: 'Auto', econome: 'Économe', maximum: 'Max' };
 
 const actions = {
   clavier: basculerClavier,
@@ -436,11 +458,7 @@ const actions = {
   copier: () => { copierVersIPad(); envoyer({ t: 'raccourci', mods: ['cmd'], c: 'c' }); },
   coller: () => collerVersMac(),
   zoom: () => { vue.echelle = 1; disposer(); },
-  qualite: (b) => {
-    qualite = QUALITES[(QUALITES.indexOf(qualite) + 1) % QUALITES.length];
-    b.textContent = NOMS_QUALITE[qualite];
-    envoyer({ t: 'qualite', q: qualite });
-  },
+  reglages: () => basculerPanneau('reglages', () => {}),
   mesures: () => { $('mesures').hidden = !$('mesures').hidden; },
   fichiers: () => basculerPanneau('fichiers', () => ouvrirDossier('')),
   infos: () => basculerPanneau('infos', diagnostic),
@@ -468,7 +486,7 @@ const mesures = { images: 0, octets: 0, latences: [], debit: 0, codec: '' };
 setInterval(() => {
   const l = mesures.latences.sort((a, b) => a - b);
   const mediane = l.length ? Math.round(l[l.length >> 1] / 1000) : '–';
-  $('mesures').textContent = `${mesures.codec || '–'} · ${mesures.images} i/s · ${(mesures.octets * 8 / 1e6).toFixed(1)} Mb/s`
+  $('mesures').textContent = `${mesures.codec || '–'} · ${config ? `${config.largeur}×${config.hauteur}` : '–'} · ${mesures.images} i/s · ${(mesures.octets * 8 / 1e6).toFixed(1)} Mb/s`
     + ` · capture→écran ${mediane} ms · cible ${(mesures.debit / 1e6).toFixed(0)} Mb/s`;
   mesures.images = 0;
   mesures.octets = 0;

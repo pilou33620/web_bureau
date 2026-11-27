@@ -1,12 +1,10 @@
 //! Régulation du flux : jamais de file d'attente. Au plus EN_VOL_MAX images envoyées et pas encore
 //! décodées par l'iPad ; au-delà, les captures sont sautées (l'image encodée suivante s'appuie sur
-//! la dernière envoyée, rien ne casse). Le débit baisse vite quand l'iPad accuse réception
-//! tard, et remonte lentement quand tout va bien.
+//! la dernière envoyée, rien ne casse). Le débit part du plafond demandé (comme Moonlight, qui
+//! tient un débit fixe), baisse vite quand l'iPad accuse réception tard, et remonte lentement.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-
-use crate::protocole::Qualite;
 
 pub const EN_VOL_MAX: usize = 2;
 pub const DEBIT_MIN: u32 = 2_000_000;
@@ -18,12 +16,28 @@ pub const PERDUE: Duration = Duration::from_secs(1);
 const MARGE_HAUTE: f64 = 0.060; // s au-dessus : on baisse
 const MARGE_BASSE: f64 = 0.015; // s au-dessus : on peut monter
 
-pub fn debit_max(q: Qualite) -> u32 {
-    match q {
-        Qualite::Econome => 8_000_000,
-        Qualite::Auto => 30_000_000,
-        Qualite::Maximum => 60_000_000,
-    }
+/// Le débit que Moonlight conseille pour cette taille et cette cadence (bit/s) : sa table par
+/// nombre de pixels (streamingpreferences.cpp), interpolée, fois la cadence rapportée à 30 i/s.
+pub fn debit_defaut(largeur: u32, hauteur: u32, ips: u32) -> u32 {
+    const TABLE: [(f64, f64); 6] = [
+        (640.0 * 360.0, 1.0),
+        (854.0 * 480.0, 2.0),
+        (1280.0 * 720.0, 5.0),
+        (1920.0 * 1080.0, 10.0),
+        (2560.0 * 1440.0, 20.0),
+        (3840.0 * 2160.0, 40.0),
+    ];
+    let pixels = largeur as f64 * hauteur as f64;
+    let facteur = match TABLE.iter().position(|(p, _)| pixels <= *p) {
+        Some(0) => TABLE[0].1,
+        Some(i) => {
+            let ((p0, f0), (p1, f1)) = (TABLE[i - 1], TABLE[i]);
+            f0 + (pixels - p0) / (p1 - p0) * (f1 - f0)
+        }
+        None => TABLE[TABLE.len() - 1].1,
+    };
+    // shortcut: proportionnel à la cadence, juste jusqu'à 60 i/s ; au-delà, Moonlight passe à la racine carrée
+    ((facteur * ips as f64 / 30.0).round() * 1_000_000.0) as u32
 }
 
 pub struct Regulation {
@@ -37,15 +51,9 @@ pub struct Regulation {
 }
 
 impl Regulation {
-    pub fn new(q: Qualite, t: Instant) -> Self {
-        let max = debit_max(q);
-        Regulation { en_vol: VecDeque::new(), debit: (max / 2).max(DEBIT_MIN), max, retard_lisse: 0.0, retard_min: f64::INFINITY, derniere_hausse: t, derniere_baisse: t }
-    }
-
-    pub fn qualite(&mut self, q: Qualite) {
-        // repart de la moitié du plafond : sinon un passage par « Économe » laissait le débit en bas
-        self.max = debit_max(q);
-        self.debit = (self.max / 2).max(DEBIT_MIN);
+    /// `max` : le plafond du débit (bit/s), d'où l'on part.
+    pub fn new(max: u32, t: Instant) -> Self {
+        Regulation { en_vol: VecDeque::new(), debit: max, max, retard_lisse: 0.0, retard_min: f64::INFINITY, derniere_hausse: t, derniere_baisse: t }
     }
 
     pub fn debit(&self) -> u32 {
@@ -92,7 +100,8 @@ impl Regulation {
         self.retard_min = self.retard_min.min(retard);
         if retard > self.retard_min + MARGE_HAUTE {
             if t.duration_since(self.derniere_baisse) > Duration::from_millis(200) {
-                self.debit = ((self.debit as f64 * 0.85) as u32).max(DEBIT_MIN);
+                // le plancher ne dépasse jamais un plafond choisi plus bas que lui
+                self.debit = ((self.debit as f64 * 0.85) as u32).max(DEBIT_MIN.min(self.max));
                 self.derniere_baisse = t;
             }
         } else if self.retard_lisse < self.retard_min + MARGE_BASSE
@@ -112,7 +121,7 @@ mod essais {
     #[test]
     fn jamais_plus_de_deux_en_vol() {
         let t = Instant::now();
-        let mut r = Regulation::new(Qualite::Auto, t);
+        let mut r = Regulation::new(30_000_000, t);
         assert!(r.peut_envoyer(t));
         r.envoyee(1, t);
         assert!(r.peut_envoyer(t));
@@ -138,8 +147,9 @@ mod essais {
     #[test]
     fn le_debit_suit_les_retards() {
         let t0 = Instant::now();
-        let mut r = Regulation::new(Qualite::Auto, t0);
+        let mut r = Regulation::new(30_000_000, t0);
         let depart = r.debit();
+        assert_eq!(depart, 30_000_000, "on part du débit demandé");
         // le délai normal de cette installation : 40 ms (au-dessus de tout seuil fixe raisonnable)
         for i in 0..5u32 {
             let t = t0 + Duration::from_millis(10 * i as u64);
@@ -160,11 +170,32 @@ mod essais {
             r.envoyee(i, t);
             r.accusee(i, t + Duration::from_millis(42));
         }
-        assert_eq!(r.debit(), debit_max(Qualite::Auto));
-        // un changement de qualité repart de la moitié du nouveau plafond, vers le haut comme vers le bas
-        r.qualite(Qualite::Econome);
-        assert_eq!(r.debit(), debit_max(Qualite::Econome) / 2);
-        r.qualite(Qualite::Maximum);
-        assert_eq!(r.debit(), debit_max(Qualite::Maximum) / 2);
+        assert_eq!(r.debit(), 30_000_000);
+    }
+
+    #[test]
+    fn un_plafond_sous_le_plancher_est_tenu() {
+        let t0 = Instant::now();
+        let mut r = Regulation::new(500_000, t0);
+        r.envoyee(0, t0);
+        r.accusee(0, t0 + Duration::from_millis(10));
+        for i in 1..20u32 {
+            let t = t0 + Duration::from_millis(300 * i as u64);
+            r.envoyee(i, t);
+            r.accusee(i, t + Duration::from_millis(200));
+        }
+        assert_eq!(r.debit(), 500_000);
+    }
+
+    #[test]
+    fn debit_conseille_par_moonlight() {
+        assert_eq!(debit_defaut(1280, 720, 60), 10_000_000);
+        assert_eq!(debit_defaut(1920, 1080, 60), 20_000_000);
+        assert_eq!(debit_defaut(1920, 1080, 30), 10_000_000);
+        assert_eq!(debit_defaut(2560, 1440, 60), 40_000_000);
+        assert_eq!(debit_defaut(3840, 2160, 60), 80_000_000);
+        assert_eq!(debit_defaut(2266, 1488, 60), 36_000_000); // l'iPad mini, entre 1080p et 1440p
+        assert_eq!(debit_defaut(320, 200, 60), 2_000_000); // jamais sous la première ligne
+        assert_eq!(debit_defaut(8192, 8192, 60), 80_000_000); // ni au-dessus de la dernière
     }
 }

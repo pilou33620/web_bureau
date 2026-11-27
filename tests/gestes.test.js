@@ -58,28 +58,46 @@ test('appui long immobile = clic droit, sans clic gauche au relâchement', () =>
   assert.strictEqual(boutons(), '1v 1^');
 });
 
-test('toucher puis appui maintenu et glisser = glisser-déposer', () => {
-  const { g, actions, avancer, doigt, boutons } = banc();
-  g.bas(doigt(1, 100, 100)); avancer(50); g.haut(doigt(1, 100, 100));
-  avancer(150);
-  g.bas(doigt(2, 100, 100));
-  g.bouge(doigt(2, 140, 100));
-  g.bouge(doigt(2, 200, 120));
-  g.haut(doigt(2, 200, 120));
-  assert.strictEqual(boutons(), '0v 0^ 0v 0^');
-  assert.deepStrictEqual(actions.filter((a) => a.t === 'bouton' && a.bas).map((a) => !!a.simple), [false, true]);
-  const derniere = actions.filter((a) => a.t === 'souris').pop();
-  assert.deepStrictEqual(derniere, { t: 'souris', x: 200, y: 120 });
-});
-
-test('un doigt qui glisse = curseur, sans clic', () => {
+test('un doigt qui glisse = glisser, bouton gauche tenu depuis le point touché', () => {
   const { g, actions, doigt, boutons } = banc();
   g.bas(doigt(1, 0, 0));
+  g.bouge(doigt(1, 4, 0)); // en deçà de la tolérance : rien
   g.bouge(doigt(1, 30, 0));
   g.bouge(doigt(1, 60, 0));
   g.haut(doigt(1, 60, 0));
-  assert.strictEqual(boutons(), '');
-  assert.strictEqual(actions.filter((a) => a.t === 'souris').length, 2);
+  assert.deepStrictEqual(actions, [
+    { t: 'souris', x: 0, y: 0 },
+    { t: 'bouton', b: 0, bas: true },
+    { t: 'souris', x: 30, y: 0 },
+    { t: 'souris', x: 60, y: 0 },
+    { t: 'bouton', b: 0, bas: false },
+  ]);
+  assert.strictEqual(boutons(), '0v 0^');
+});
+
+test('toucher puis glisser aussitôt : le bouton s\'enfonce au point du toucher (double clic tenu)', () => {
+  const { g, actions, avancer, doigt, boutons } = banc();
+  g.bas(doigt(1, 100, 100)); avancer(50); g.haut(doigt(1, 100, 100));
+  avancer(150);
+  g.bas(doigt(2, 108, 104));
+  g.bouge(doigt(2, 140, 100));
+  g.haut(doigt(2, 200, 120));
+  assert.strictEqual(boutons(), '0v 0^ 0v 0^');
+  const avant = actions[actions.findIndex((a, i) => i > 2 && a.t === 'bouton') - 1];
+  assert.deepStrictEqual(avant, { t: 'souris', x: 100, y: 100 });
+});
+
+test('un second doigt pendant un glisser ne déplace rien ; le bouton tient jusqu\'au dernier doigt', () => {
+  const { g, actions, doigt, boutons } = banc();
+  g.bas(doigt(1, 0, 0));
+  g.bouge(doigt(1, 50, 0));
+  g.bas(doigt(2, 300, 300));
+  g.bouge(doigt(2, 320, 300));
+  g.haut(doigt(1, 50, 0));
+  assert.strictEqual(boutons(), '0v');
+  g.haut(doigt(2, 320, 300));
+  assert.strictEqual(boutons(), '0v 0^');
+  assert.deepStrictEqual(actions.filter((a) => a.t === 'souris').pop(), { t: 'souris', x: 50, y: 0 });
 });
 
 test('toucher à 2 doigts = clic droit', () => {

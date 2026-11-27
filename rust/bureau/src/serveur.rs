@@ -22,8 +22,8 @@ use crate::macos::encodage::{Encodeur, ImageEncodee};
 use crate::macos::entrees::Entrees;
 use crate::macos::{self, barre_menus, presse_papiers, CMTime};
 use crate::maj;
-use crate::protocole::{self, Codec, Entree, Qualite};
-use crate::regulation::Regulation;
+use crate::protocole::{self, Bonjour, Codec, Entree};
+use crate::regulation::{self, Regulation};
 use crate::video;
 use crate::ws::{self, Trames};
 
@@ -432,17 +432,17 @@ fn session(c: &mut dyn Duplex, ip: IpAddr) {
     let mut trames = Trames::default();
     let mut tampon = vec![0u8; 64 * 1024];
     let _ = c.delai_lecture(Some(Duration::from_millis(50)));
-    // 1. l'iPad se présente : taille de son écran, codecs que Safari décode
+    // 1. l'iPad se présente : taille de l'image, codecs que Safari décode, cadence, débit
     let debut = Instant::now();
-    let (largeur, hauteur, codecs) = 'attente: loop {
+    let demande = 'attente: loop {
         if debut.elapsed() > Duration::from_secs(10) {
             return;
         }
         let Ok(recues) = recevoir(c, &mut trames, &mut tampon) else { return };
         for t in recues {
             if t.op == ws::TEXTE {
-                if let Ok(Entree::Bonjour { largeur, hauteur, codecs }) = protocole::lire(&String::from_utf8_lossy(&t.donnees)) {
-                    break 'attente (largeur & !1, hauteur & !1, codecs);
+                if let Ok(Entree::Bonjour(b)) = protocole::lire(&String::from_utf8_lossy(&t.donnees)) {
+                    break 'attente Bonjour { largeur: b.largeur & !1, hauteur: b.hauteur & !1, ..b };
                 }
             }
             return;
@@ -455,7 +455,7 @@ fn session(c: &mut dyn Duplex, ip: IpAddr) {
         *verrou(&ancienne.fin) = Some("reprise");
     }
     let _capture_tenue = verrou(&e.capture);
-    let raison = derouler(c, &mut trames, &mut tampon, &moi, largeur, hauteur, &codecs);
+    let raison = derouler(c, &mut trames, &mut tampon, &moi, &demande);
     // 3. fin : tout relâcher ; verrouiller après inactivité si le déverrouillage est vérifié
     verrou(&e.entrees).relacher();
     if raison == "inactivite" && verrou(&e.reglages).deverrouillage_verifie {
@@ -479,9 +479,7 @@ fn derouler(
     trames: &mut Trames,
     tampon: &mut [u8],
     moi: &Arc<Session>,
-    largeur: u32,
-    hauteur: u32,
-    codecs: &[Codec],
+    demande: &Bonjour,
 ) -> &'static str {
     let e = etat();
     if let Some(raison) = *verrou(&moi.fin) {
@@ -495,18 +493,20 @@ fn derouler(
     if !macos::permission_ecran(false) {
         return erreur(c, "permission « Enregistrement de l'écran » manquante sur le Mac".into());
     }
-    let (ecran, l, h) = match preparer_ecran(largeur, hauteur) {
+    let (ecran, l, h) = match preparer_ecran(demande.largeur, demande.hauteur) {
         Ok(x) => x,
         Err(m) => return erreur(c, m),
     };
     verrou(&e.entrees).regler_ecran(ecran);
-    println!("[{}] session {} : {}×{}", appairage::heure(), moi.ip, l, h);
+    let ips = demande.ips;
+    let debit = demande.debit.unwrap_or_else(|| regulation::debit_defaut(l as u32, h as u32, ips));
+    println!("[{}] session {} : {}×{}, {} i/s, {} Mb/s au plus", appairage::heure(), moi.ip, l, h, ips, debit / 1_000_000);
     barre_menus::afficher(format!("● web_bureau — {}", moi.ip));
     macos::reveiller_ecran();
     let _veille = macos::empecher("PreventUserIdleDisplaySleep");
 
     let depart = Instant::now();
-    let flux = Arc::new(Flux { regulation: Mutex::new(Regulation::new(Qualite::Auto, depart)), image_cle: AtomicBool::new(true), numero: AtomicU32::new(1), en_attente: Mutex::new(None) });
+    let flux = Arc::new(Flux { regulation: Mutex::new(Regulation::new(debit, depart)), image_cle: AtomicBool::new(true), numero: AtomicU32::new(1), en_attente: Mutex::new(None) });
     let (tx, rx) = mpsc::sync_channel::<Message>(8);
 
     // encodeur : HEVC si Safari le décode et que la puce l'accepte, sinon H.264
@@ -529,11 +529,10 @@ fn derouler(
             }
         })
     };
-    let debit = verrou(&flux.regulation).debit();
     let encodeur = [Codec::Hevc, Codec::Avc]
         .into_iter()
-        .filter(|codec| codecs.contains(codec))
-        .find_map(|codec| Encodeur::nouveau(codec, l, h, debit, rappel(flux.clone(), tx.clone())).ok());
+        .filter(|codec| demande.codecs.contains(codec))
+        .find_map(|codec| Encodeur::nouveau(codec, l, h, ips, debit, rappel(flux.clone(), tx.clone())).ok());
     let Some(encodeur) = encodeur else { return erreur(c, "aucun encodeur matériel pour un codec que Safari décode".into()) };
     let codec_choisi = encodeur.codec;
     let chaine_codec = |d: &[u8]| match codec_choisi {
@@ -549,6 +548,7 @@ fn derouler(
             ecran,
             l,
             h,
+            ips,
             Box::new(move |image: *mut std::ffi::c_void, pts: CMTime| {
                 // tenu pendant l'envoi : une image gardée ne part jamais après une plus récente
                 let mut attente = verrou(&flux.en_attente);
@@ -637,7 +637,7 @@ fn derouler(
             }
             match entree {
                 Entree::Souris { x, y } => verrou(&e.entrees).souris(x, y),
-                Entree::Bouton { b, bas, simple } => verrou(&e.entrees).bouton(b, bas, simple),
+                Entree::Bouton { b, bas } => verrou(&e.entrees).bouton(b, bas),
                 Entree::Molette { dx, dy } => verrou(&e.entrees).molette(dx, dy),
                 Entree::Touche { kvk, bas } => verrou(&e.entrees).touche(kvk, bas),
                 Entree::Texte(s) => verrou(&e.entrees).texte(&s),
@@ -657,8 +657,7 @@ fn derouler(
                 }
                 Entree::Deverrouiller(_) => {}
                 Entree::Pong { n } if n == n_ping => rtt_ms = ping_envoye.elapsed().as_secs_f64() * 1000.0,
-                Entree::Qualite(q) => verrou(&flux.regulation).qualite(q),
-                Entree::Pong { .. } | Entree::Bonjour { .. } => {}
+                Entree::Pong { .. } | Entree::Bonjour(_) => {}
             }
         }
         // l'image gardée part dès que l'iPad a rattrapé : la dernière image d'un changement arrive toujours

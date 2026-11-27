@@ -96,8 +96,8 @@ pub struct Capture {
 unsafe impl Send for Capture {}
 
 impl Capture {
-    /// Capture l'écran `ecran` (CGDirectDisplayID) à `largeur` × `hauteur` pixels, 60 i/s au plus.
-    pub fn demarrer(ecran: u32, largeur: usize, hauteur: usize, rappel: Rappel) -> Result<Capture, String> {
+    /// Capture l'écran `ecran` (CGDirectDisplayID) à `largeur` × `hauteur` pixels, `ips` images par seconde au plus.
+    pub fn demarrer(ecran: u32, largeur: usize, hauteur: usize, ips: u32, rappel: Rappel) -> Result<Capture, String> {
         let _ = unsafe { SCStreamFrameInfoStatus };
         // un écran virtuel tout juste créé met un instant à apparaître
         let mut ecran_sc = None;
@@ -126,9 +126,13 @@ impl Capture {
             let _: () = msg_send![&*cfg, setWidth: largeur];
             let _: () = msg_send![&*cfg, setHeight: hauteur];
             let _: () = msg_send![&*cfg, setPixelFormat: NV12];
-            let _: () = msg_send![&*cfg, setMinimumFrameInterval: CMTime::new(1, 60)];
+            // un peu moins que 1/ips (repris de Sunshine) : l'intervalle exact bat contre l'horloge de
+            // WindowServer, qui retient alors les images arrivées un rien trop tôt
+            let _: () = msg_send![&*cfg, setMinimumFrameInterval: CMTime::new(9, 10 * ips as i32)];
             let _: () = msg_send![&*cfg, setShowsCursor: true];
-            let _: () = msg_send![&*cfg, setQueueDepth: 5isize]; // dont une image que le serveur peut garder
+            // le plus grand permis (Sunshine) : macOS ne livre que s'il lui reste une surface libre, et
+            // le serveur en garde jusqu'à 3 (une image en attente, deux à l'encodeur)
+            let _: () = msg_send![&*cfg, setQueueDepth: 8isize];
             let flux: Allocated<AnyObject> = msg_send![class!(SCStream), alloc];
             let flux: Retained<AnyObject> =
                 msg_send![flux, initWithFilter: &*filtre, configuration: &*cfg, delegate: std::ptr::null_mut::<AnyObject>()];

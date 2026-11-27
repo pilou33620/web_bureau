@@ -134,7 +134,7 @@ extern "C" fn sortie(refcon: *mut c_void, refcon_image: *mut c_void, statut: OSS
 }
 
 impl Encodeur {
-    pub fn nouveau(codec: Codec, largeur: usize, hauteur: usize, debit: u32, rappel: RappelEncodeur) -> Result<Encodeur, String> {
+    pub fn nouveau(codec: Codec, largeur: usize, hauteur: usize, ips: u32, debit: u32, rappel: RappelEncodeur) -> Result<Encodeur, String> {
         let type_codec: u32 = match codec {
             Codec::Avc => 0x6176_6331,  // 'avc1'
             Codec::Hevc => 0x6876_6331, // 'hvc1'
@@ -186,9 +186,10 @@ impl Encodeur {
             VTSessionSetProperty(session, kVTCompressionPropertyKey_RealTime, vrai());
             VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
             VTSessionSetProperty(session, kVTCompressionPropertyKey_ProfileLevel, profil);
-            VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, cf_entier(60).0);
-            // une image clé par minute au plus tard ; les autres seulement à la demande de l'iPad
-            VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, cf_entier(3600).0);
+            VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, cf_entier(ips as i32).0);
+            // image clé seulement à la demande de l'iPad (comme Sunshine) : une image clé périodique
+            // est un pic de débit, donc un à-coup
+            VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, cf_entier(i32::MAX).0);
             VTCompressionSessionPrepareToEncodeFrames(session);
         }
         let mut e = e;
@@ -242,6 +243,7 @@ pub fn essai(codec: Codec, largeur: usize, hauteur: usize) -> Result<f64, String
         codec,
         largeur,
         hauteur,
+        60,
         20_000_000,
         Box::new(move |_: u32, image: Option<ImageEncodee>| {
             if image.is_some() {

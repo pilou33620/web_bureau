@@ -95,8 +95,7 @@ impl Entrees {
         poster(unsafe { CGEventCreateMouseEvent(self.source, genre, self.position, bouton) }, self.indicateurs);
     }
 
-    /// `simple` : ne jamais compter un double clic (début d'un glisser tactile, juste après un toucher).
-    pub fn bouton(&mut self, b: u8, bas: bool, simple: bool) {
+    pub fn bouton(&mut self, b: u8, bas: bool) {
         let i = b.min(2) as usize;
         if self.boutons[i] == bas {
             return;
@@ -106,7 +105,7 @@ impl Entrees {
         let compte = if bas {
             let proche = |p: CGPoint| (p.x - self.position.x).abs() < 5.0 && (p.y - self.position.y).abs() < 5.0;
             let n = match self.dernier_clic {
-                Some((t, p, d, n)) if !simple && d == b && maintenant - t < CLIC_DOUBLE && proche(p) => n + 1,
+                Some((t, p, d, n)) if d == b && maintenant - t < CLIC_DOUBLE && proche(p) => n + 1,
                 _ => 1,
             };
             self.dernier_clic = Some((maintenant, self.position, b, n));
@@ -195,7 +194,7 @@ impl Entrees {
             poster(unsafe { CGEventCreateKeyboardEvent(self.source, kvk, false) }, self.indicateurs);
         }
         for b in 0..3u8 {
-            self.bouton(b, false, false);
+            self.bouton(b, false);
         }
         self.indicateurs = 0;
     }

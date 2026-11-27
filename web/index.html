@@ -33,7 +33,7 @@
   <button data-action="copier" title="Copier depuis le Mac">Copier</button>
   <button data-action="coller" title="Coller vers le Mac">Coller</button>
   <button data-action="zoom" title="Vue à 100 %">1:1</button>
-  <button data-action="qualite" title="Qualité">Auto</button>
+  <button data-action="reglages" title="Réglages : résolution, images par seconde, débit">⚙︎</button>
   <button data-action="fichiers" title="Fichiers">📁</button>
   <button data-action="mesures" title="Mesures">📈</button>
   <button data-action="infos" title="Infos et diagnostic">ⓘ</button>
@@ -60,6 +60,34 @@
   <p id="fichiers-etat" class="aide"></p>
 </section>
 
+<section id="panneau-reglages" class="panneau carte" hidden>
+  <button class="fermer" aria-label="Fermer">✕</button>
+  <h2>Réglages</h2>
+  <label>Résolution
+    <select name="resolution">
+      <option value="ipad" selected>Écran de l'iPad</option>
+      <option value="720">720p</option>
+      <option value="1080">1080p</option>
+      <option value="1440">1440p</option>
+      <option value="2160">4K</option>
+    </select>
+  </label>
+  <label>Images par seconde
+    <select name="ips">
+      <option value="30">30</option>
+      <option value="60" selected>60</option>
+    </select>
+  </label>
+  <label>Débit
+    <select name="debit" id="reglage-debit">
+      <option value="0" selected>Automatique</option>
+    </select>
+  </label>
+  <p class="aide">Ce sont les réglages de Moonlight, gardés sur cet iPad. Un changement relance la vidéo.
+    Débit automatique : celui que Moonlight conseille pour la résolution et la cadence choisies (📈 l'affiche).
+    Le débit est un plafond : il baisse seul si le Wi-Fi ne suit pas, puis remonte.</p>
+</section>
+
 <section id="panneau-infos" class="panneau carte" hidden>
   <button class="fermer" aria-label="Fermer">✕</button>
   <h2>Infos</h2>
@@ -73,8 +101,8 @@
     <button type="submit">Tester</button>
   </form>
   <p id="essai-etat" class="aide"></p>
-  <p class="aide">Gestes : toucher = clic · double toucher = double clic · appui long = clic droit ·
-    toucher puis appui maintenu et glisser = glisser-déposer · un doigt = curseur · 2 doigts = défiler
+  <p class="aide">Gestes (écran tactile, comme Moonlight) : toucher = clic · double toucher = double clic ·
+    un doigt qui glisse = glisser, bouton tenu · appui long = clic droit · 2 doigts = défiler
     (toucher à 2 doigts = clic droit) · pincer = zoom · 3 doigts = clavier.</p>
 </section>
 

@@ -37,6 +37,10 @@ body.barre-repliee #barre .replier { transform: rotate(180deg); }
 .carte .fermer { position: absolute; top: 10px; right: 10px; background: #3a3a3c; min-width: 32px; }
 .aide { color: #a1a1a6; font-size: 13px; margin: 8px 0 0; }
 
+#panneau-reglages label { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 10px 0; }
+#panneau-reglages select { font-size: 16px; padding: 6px 8px; border-radius: 9px; border: 1px solid #48484a;
+  background: #1c1c1e; color: inherit; }
+
 #verrou { left: 50%; top: 30%; transform: translate(-50%, -50%); text-align: center; }
 #verrou form { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 

@@ -26,7 +26,8 @@ fn classe(nom: &std::ffi::CStr) -> Result<&'static AnyClass, String> {
 const PPP: f64 = 220.0; // densité annoncée à macOS (points par pouce, en pixels)
 
 impl EcranVirtuel {
-    /// Un écran de `largeur` × `hauteur` pixels, en HiDPI (le texte a la taille de celui de l'iPad).
+    /// Un écran de `largeur` × `hauteur` pixels, en HiDPI s'il est assez grand (le texte a alors la
+    /// taille de celui de l'iPad).
     pub fn creer(largeur: u32, hauteur: u32) -> Result<EcranVirtuel, String> {
         sur_fil_principal_attendre(move || unsafe {
             let (c_desc, c_ecran) = (classe(c"CGVirtualDisplayDescriptor")?, classe(c"CGVirtualDisplay")?);
@@ -60,13 +61,16 @@ impl EcranVirtuel {
 
     fn appliquer(&mut self, largeur: u32, hauteur: u32) -> Result<(), String> {
         unsafe {
-            // le mode est en points ; hiDPI double les pixels
+            // le mode est en points ; hiDPI double les pixels. Sous 1400 pixels de petit côté (720p,
+            // 1080p), un point par pixel : en HiDPI le bureau serait trop petit pour macOS
+            let hidpi = largeur.min(hauteur) >= 1400;
+            let k = if hidpi { 2 } else { 1 };
             let (c_mode, c_reglages) = (classe(c"CGVirtualDisplayMode")?, classe(c"CGVirtualDisplaySettings")?);
             let a: Allocated<AnyObject> = msg_send![c_mode, alloc];
             let mode: Retained<AnyObject> =
-                msg_send![a, initWithWidth: (largeur / 2) as usize, height: (hauteur / 2) as usize, refreshRate: 60.0f64];
+                msg_send![a, initWithWidth: (largeur / k) as usize, height: (hauteur / k) as usize, refreshRate: 60.0f64];
             let reglages: Retained<AnyObject> = msg_send![c_reglages, new];
-            let _: () = msg_send![&*reglages, setHiDPI: 1u32];
+            let _: () = msg_send![&*reglages, setHiDPI: hidpi as u32];
             let modes: Retained<AnyObject> = msg_send![class!(NSArray), arrayWithObject: &*mode];
             let _: () = msg_send![&*reglages, setModes: &*modes];
             let ok: bool = msg_send![&*self.objet, applySettings: &*reglages];

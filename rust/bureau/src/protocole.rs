@@ -11,6 +11,7 @@ pub const MDP_MAX: usize = 256;
 pub const MOLETTE_MAX: f64 = 5000.0;
 pub const ECRAN_MIN: u32 = 320;
 pub const ECRAN_MAX: u32 = 8192;
+pub const DEBIT_KBPS: std::ops::RangeInclusive<u64> = 500..=150_000; // les bornes du curseur de Moonlight
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Codec {
@@ -18,21 +19,27 @@ pub enum Codec {
     Hevc,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Qualite {
-    Econome,
-    Auto,
-    Maximum,
+/// Ce que l'iPad demande à la connexion.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bonjour {
+    /// Taille de l'image en pixels : l'écran de l'iPad, ou la résolution choisie.
+    pub largeur: u32,
+    pub hauteur: u32,
+    /// Codecs que Safari décode.
+    pub codecs: Vec<Codec>,
+    /// Images par seconde : 30 ou 60.
+    pub ips: u32,
+    /// Plafond du débit en bit/s ; None : celui que Moonlight conseille pour cette taille et cette cadence.
+    pub debit: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entree {
-    /// Taille de l'écran de l'iPad en pixels, codecs que Safari décode.
-    Bonjour { largeur: u32, hauteur: u32, codecs: Vec<Codec> },
+    Bonjour(Bonjour),
     /// Position normalisée dans l'image (0..1).
     Souris { x: f64, y: f64 },
-    /// 0 gauche, 1 droit, 2 milieu. `simple` : jamais un double clic (début d'un glisser tactile).
-    Bouton { b: u8, bas: bool, simple: bool },
+    /// 0 gauche, 1 droit, 2 milieu.
+    Bouton { b: u8, bas: bool },
     /// Pixels ; dy > 0 fait descendre le contenu (sens du navigateur).
     Molette { dx: f64, dy: f64 },
     /// Code virtuel macOS déjà traduit (clavier physique).
@@ -49,7 +56,6 @@ pub enum Entree {
     PressePapiers(String),
     Deverrouiller(String),
     Pong { n: u64 },
-    Qualite(Qualite),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -99,12 +105,22 @@ pub fn lire(message: &str) -> Result<Entree, String> {
                     _ => None,
                 })
                 .collect();
-            Entree::Bonjour { largeur, hauteur, codecs }
+            let ips = match &v["ips"] {
+                Value::Null => 60,
+                n => n.as_u64().filter(|n| [30, 60].contains(n)).ok_or("images par seconde invalides")? as u32,
+            };
+            let debit = match v["debit"].as_u64() {
+                None if !v["debit"].is_null() => return Err("débit invalide".into()),
+                None | Some(0) => None,
+                Some(kbps) if DEBIT_KBPS.contains(&kbps) => Some(kbps as u32 * 1000),
+                Some(_) => return Err("débit invalide".into()),
+            };
+            Entree::Bonjour(Bonjour { largeur, hauteur, codecs, ips, debit })
         }
         "souris" => Entree::Souris { x: dans_l_image(nombre(&v, "x")?)?, y: dans_l_image(nombre(&v, "y")?)? },
         "bouton" => {
             let b = v["b"].as_u64().filter(|b| *b <= 2).ok_or("bouton invalide")? as u8;
-            Entree::Bouton { b, bas: booleen(&v, "bas")?, simple: v["simple"].as_bool().unwrap_or(false) }
+            Entree::Bouton { b, bas: booleen(&v, "bas")? }
         }
         "molette" => {
             let (dx, dy) = (nombre(&v, "dx")?, nombre(&v, "dy")?);
@@ -151,12 +167,6 @@ pub fn lire(message: &str) -> Result<Entree, String> {
             Entree::Deverrouiller(mdp.to_string())
         }
         "pong" => Entree::Pong { n: v["n"].as_u64().ok_or("pong invalide")? },
-        "qualite" => Entree::Qualite(match v["q"].as_str() {
-            Some("econome") => Qualite::Econome,
-            Some("auto") => Qualite::Auto,
-            Some("maximum") => Qualite::Maximum,
-            _ => return Err("qualité inconnue".into()),
-        }),
         _ => return Err("type inconnu".into()),
     })
 }
@@ -169,11 +179,15 @@ mod essais {
     fn messages_valides() {
         assert_eq!(
             lire(r#"{"t":"bonjour","ecran":[2266,1488],"codecs":["hevc","avc","vp9"]}"#),
-            Ok(Entree::Bonjour { largeur: 2266, hauteur: 1488, codecs: vec![Codec::Hevc, Codec::Avc] })
+            Ok(Entree::Bonjour(Bonjour { largeur: 2266, hauteur: 1488, codecs: vec![Codec::Hevc, Codec::Avc], ips: 60, debit: None }))
         );
+        assert_eq!(
+            lire(r#"{"t":"bonjour","ecran":[1920,1080],"codecs":["avc"],"ips":30,"debit":20000}"#),
+            Ok(Entree::Bonjour(Bonjour { largeur: 1920, hauteur: 1080, codecs: vec![Codec::Avc], ips: 30, debit: Some(20_000_000) }))
+        );
+        assert!(matches!(lire(r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"debit":0}"#), Ok(Entree::Bonjour(Bonjour { debit: None, .. }))));
         assert_eq!(lire(r#"{"t":"souris","x":0.5,"y":1}"#), Ok(Entree::Souris { x: 0.5, y: 1.0 }));
-        assert_eq!(lire(r#"{"t":"bouton","b":1,"bas":true}"#), Ok(Entree::Bouton { b: 1, bas: true, simple: false }));
-        assert_eq!(lire(r#"{"t":"bouton","b":0,"bas":true,"simple":true}"#), Ok(Entree::Bouton { b: 0, bas: true, simple: true }));
+        assert_eq!(lire(r#"{"t":"bouton","b":1,"bas":true}"#), Ok(Entree::Bouton { b: 1, bas: true }));
         assert_eq!(lire(r#"{"t":"touche","code":"KeyQ","bas":false}"#), Ok(Entree::Touche { kvk: 0x0C, bas: false }));
         assert_eq!(lire(r#"{"t":"texte","s":"é😀"}"#), Ok(Entree::Texte("é😀".into())));
         assert_eq!(
@@ -185,7 +199,6 @@ mod essais {
             Ok(Entree::Raccourci { indicateurs: clavier::CTRL, cible: Cible::Touche(0x7E) })
         );
         assert_eq!(lire(r#"{"t":"ack","n":42}"#), Ok(Entree::Ack { n: 42 }));
-        assert_eq!(lire(r#"{"t":"qualite","q":"econome"}"#), Ok(Entree::Qualite(Qualite::Econome)));
         assert_eq!(lire(r#"{"t":"relacher"}"#), Ok(Entree::Relacher));
     }
 
@@ -210,7 +223,12 @@ mod essais {
             r#"{"t":"bonjour","ecran":[2266],"codecs":[]}"#,
             r#"{"t":"deverrouiller","mdp":""}"#,
             r#"{"t":"deverrouiller","mdp":"a\nb"}"#,
-            r#"{"t":"qualite","q":"ultra"}"#,
+            r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"ips":120}"#,
+            r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"ips":"60"}"#,
+            r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"debit":499}"#,
+            r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"debit":150001}"#,
+            r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"debit":"auto"}"#,
+            r#"{"t":"qualite","q":"auto"}"#,
             r#"{"t":"ack","n":-1}"#,
         ] {
             assert!(lire(m).is_err(), "{m}");
