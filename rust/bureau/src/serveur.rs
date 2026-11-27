@@ -240,6 +240,16 @@ fn router(r: &mut Requete) -> Reponse {
     resultat.unwrap_or_else(|_| detail(500, "erreur interne"))
 }
 
+/// Des images parties par UDP sans aucun accusé de réception depuis ce délai, page vivante : l'UDP ne passe pas.
+const UDP_MUET: Duration = Duration::from_secs(2);
+
+/// Un numéro propre à ce lancement du serveur : une page restée ouverte pendant une mise à jour le
+/// voit changer et se recharge, au lieu de parler l'ancien protocole au nouveau serveur.
+fn lancement() -> u64 {
+    static LANCEMENT: OnceLock<u64> = OnceLock::new();
+    *LANCEMENT.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64))
+}
+
 /// Les notes que la page peut ajouter au journal pendant une session (une page folle ne le remplit pas).
 const NOTES_MAX: u32 = 200;
 
@@ -396,8 +406,12 @@ struct Flux {
     regulation: Mutex<Regulation>,
     image_cle: AtomicBool,
     numero: AtomicU32,
-    /// La dernière capture qui n'a pas pu partir : macOS n'en redonne pas tant que l'écran ne change plus.
-    en_attente: Mutex<Option<(macos::Image, CMTime)>>,
+    /// La dernière capture, l'instant de son arrivée, et si elle est partie à l'encodeur. Gardée même
+    /// partie : macOS n'en redonne pas tant que l'écran ne change plus, et l'iPad peut avoir besoin
+    /// d'une image clé d'ici là (image perdue, décodeur relancé, retour au premier plan).
+    derniere: Mutex<Option<(macos::Image, CMTime, Instant, bool)>>,
+    /// L'horodatage de la dernière image donnée à l'encodeur, qui les exige croissants.
+    horodatage: Mutex<i64>,
 }
 
 /// Donne une image à l'encodeur si l'iPad suit. false : pas partie (iPad ou encodeur occupés), à garder.
@@ -410,6 +424,11 @@ fn pousser(flux: &Flux, encodeur: &Mutex<Option<Encodeur>>, image: *mut std::ffi
             return false; // l'iPad n'a pas encore décodé
         }
         reg.debit()
+    };
+    let pts = {
+        let mut dernier = verrou(&flux.horodatage);
+        *dernier = pts.value.max(*dernier + 1);
+        CMTime { value: *dernier, ..pts }
     };
     let n = flux.numero.fetch_add(1, Ordering::SeqCst);
     verrou(&flux.regulation).envoyee(n, t);
@@ -528,7 +547,7 @@ fn derouler(
     let _veille = macos::empecher("PreventUserIdleDisplaySleep");
 
     let depart = Instant::now();
-    let flux = Arc::new(Flux { regulation: Mutex::new(Regulation::new(debit, ips, depart)), image_cle: AtomicBool::new(true), numero: AtomicU32::new(1), en_attente: Mutex::new(None) });
+    let flux = Arc::new(Flux { regulation: Mutex::new(Regulation::new(debit, ips, depart)), image_cle: AtomicBool::new(true), numero: AtomicU32::new(1), derniere: Mutex::new(None), horodatage: Mutex::new(0) });
     let (tx, rx) = mpsc::sync_channel::<Message>(8);
 
     // encodeur : HEVC si Safari le décode et que la puce l'accepte, sinon H.264
@@ -574,8 +593,9 @@ fn derouler(
             ips,
             Box::new(move |image: *mut std::ffi::c_void, pts: CMTime| {
                 // tenu pendant l'envoi : une image gardée ne part jamais après une plus récente
-                let mut attente = verrou(&flux.en_attente);
-                *attente = if pousser(&flux, &encodeur, image, pts) { None } else { Some((macos::Image::retenir(image), pts)) };
+                let mut derniere = verrou(&flux.derniere);
+                let partie = pousser(&flux, &encodeur, image, pts);
+                *derniere = Some((macos::Image::retenir(image), pts, Instant::now(), partie));
             }),
         )
     };
@@ -585,11 +605,13 @@ fn derouler(
     };
 
     // vidéo par UDP : la page s'y branche avec ce billet si Safari sait faire ; d'ici là, et sinon, le WebSocket
-    let passage = UDP.get().map(|billets| billets.ouvrir());
+    let mut passage = UDP.get().map(|billets| billets.ouvrir());
     if let Some(p) = &passage {
         let _ = envoyer_texte(c, &json!({"t": "udp", "billet": p.billet})); // une liaison morte se voit dans la boucle
     }
     let mut precedente = 0u32;
+    // la plus ancienne image partie par UDP depuis le dernier accusé de réception, et le dernier signe de vie de la page
+    let (mut udp_sans_accuse, mut dernier_pong) = (None::<Instant>, Instant::now());
     let (mut envoyees, mut par_udp, mut cles_demandees, mut notes) = (0u32, 0u32, 0u32, 0u32);
 
     // boucle : images vers l'iPad, entrées vers le Mac
@@ -618,7 +640,7 @@ fn derouler(
                     let Some(codec) = chaine_codec(&d) else { continue };
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&d);
                     description = d;
-                    envoyer_texte(c, &json!({"t": "config", "codec": codec, "largeur": l, "hauteur": h, "description": b64}))
+                    envoyer_texte(c, &json!({"t": "config", "codec": codec, "largeur": l, "hauteur": h, "description": b64, "lancement": lancement()}))
                 }
                 Message::Description(_) => Ok(()),
                 Message::Image { n, .. } if description.is_empty() => {
@@ -636,7 +658,10 @@ fn derouler(
                         None => Some(corps),
                     };
                     envoyees += 1;
-                    par_udp += reste.is_none() as u32;
+                    if reste.is_none() {
+                        par_udp += 1;
+                        udp_sans_accuse.get_or_insert_with(Instant::now);
+                    }
                     match reste {
                         Some(corps) => c.write_all(&ws::trame(ws::BINAIRE, &corps)).and_then(|_| c.flush()),
                         None => Ok(()),
@@ -684,7 +709,10 @@ fn derouler(
                 Entree::Texte(s) => verrou(&e.entrees).texte(&s),
                 Entree::Raccourci { indicateurs, cible } => verrou(&e.entrees).raccourci(indicateurs, cible),
                 Entree::Relacher => verrou(&e.entrees).relacher(),
-                Entree::Ack { n } => verrou(&flux.regulation).accusee(n, Instant::now()),
+                Entree::Ack { n } => {
+                    udp_sans_accuse = None;
+                    verrou(&flux.regulation).accusee(n, Instant::now());
+                }
                 Entree::ImageCle => {
                     cles_demandees += 1;
                     flux.image_cle.store(true, Ordering::SeqCst);
@@ -708,18 +736,36 @@ fn derouler(
                     std::thread::spawn(move || verrou(&etat().entrees).deverrouiller(&mdp));
                 }
                 Entree::Deverrouiller(_) => {}
-                Entree::Pong { n } if n == n_ping => rtt_ms = ping_envoye.elapsed().as_secs_f64() * 1000.0,
+                Entree::Pong { n } if n == n_ping => {
+                    dernier_pong = Instant::now();
+                    rtt_ms = ping_envoye.elapsed().as_secs_f64() * 1000.0;
+                }
                 Entree::Pong { .. } | Entree::Bonjour(_) => {}
             }
         }
-        // l'image gardée part dès que l'iPad a rattrapé : la dernière image d'un changement arrive toujours
+        // la dernière capture part dès que l'iPad a rattrapé (la fin d'un changement arrive toujours), et
+        // repart si l'iPad demande une image clé alors que l'écran ne change plus
         {
-            let mut attente = verrou(&flux.en_attente);
-            if attente.as_ref().is_some_and(|(image, pts)| pousser(&flux, &encodeur, image.tampon(), *pts)) {
-                *attente = None;
+            let mut derniere = verrou(&flux.derniere);
+            if let Some((image, pts, arrivee, partie)) = derniere.as_mut() {
+                if !*partie || flux.image_cle.load(Ordering::SeqCst) {
+                    // renvoyée : à l'heure qu'il est, pas à celle de sa capture (l'encodeur dose le débit sur les horodatages)
+                    let retard = if *partie { (arrivee.elapsed().as_secs_f64() * pts.timescale as f64) as i64 } else { 0 };
+                    if pousser(&flux, &encodeur, image.tampon(), CMTime { value: pts.value + retard, ..*pts }) {
+                        *partie = true;
+                    }
+                }
             }
         }
         let maintenant = Instant::now();
+        // UDP branché mais muet : la page répond (pong) mais n'accuse plus aucune image, donc ses flux
+        // n'arrivent pas. On le quitte pour le WebSocket, sinon l'image resterait figée sans recours.
+        if udp_sans_accuse.is_some_and(|t| maintenant - t > UDP_MUET) && maintenant - dernier_pong < UDP_MUET {
+            println!("[{}] session {} : UDP muet depuis {} s, la vidéo repasse par le WebSocket", appairage::heure(), moi.ip, UDP_MUET.as_secs());
+            passage = None;
+            udp_sans_accuse = None;
+            flux.image_cle.store(true, Ordering::SeqCst);
+        }
         // horloge et temps aller-retour, pour la mesure de latence de la page
         if maintenant - dernier_ping > Duration::from_secs(1) {
             n_ping += 1;

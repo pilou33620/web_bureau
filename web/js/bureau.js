@@ -95,6 +95,7 @@ async function connecter() {
   moi.binaryType = 'arraybuffer';
   moi.onopen = () => { tailleConnectee = taille; envoyer({ t: 'bonjour', ecran: taille, codecs, ips: +reglage('ips'), debit: +reglage('debit') }); };
   moi.onmessage = (ev) => {
+    if (ws !== moi) return; // liaison remplacée : son « fin » ne doit pas arrêter la nouvelle
     dernierSignal = performance.now();
     if (typeof ev.data === 'string') recuTexte(JSON.parse(ev.data));
     else recuImage(ev.data);
@@ -239,7 +240,8 @@ async function ouvrirUdp(billet) {
     }
   } catch (e) {
     // refusé ou coupé : le Mac envoie la vidéo par le WebSocket. Fermé par nous (udp a changé) : rien à noter
-    if (udp === liaison) noter(`WebTransport ${udpBranche ? 'coupé' : 'refusé'} : ${e}`);
+    // sans le billet, que Safari peut citer avec l'adresse : rien de secret dans le journal
+    if (udp === liaison) noter(`WebTransport ${udpBranche ? 'coupé' : 'refusé'} : ${String(e).split(billet).join('…')}`);
   }
   if (udp === liaison) fermerUdp();
 }
@@ -268,12 +270,16 @@ function dessiner(image) {
 
 // -- messages du Mac -----------------------------------------------------------------
 
+let lancementVu = null; // le numéro de lancement du serveur qui a servi cette page
 const horloge = { ecart: null }; // horloge du Mac (µs) − horloge de la page (µs)
 let attenteCopie = null;
 
 function recuTexte(m) {
   switch (m.t) {
     case 'config':
+      // le serveur a été relancé (mise à jour) : cette page est peut-être d'une autre version que lui
+      if (lancementVu !== null && m.lancement !== lancementVu) { location.reload(); return; }
+      lancementVu = m.lancement;
       config = m;
       ecran.width = m.largeur;
       ecran.height = m.hauteur;
@@ -346,8 +352,10 @@ function zoomer(a) {
   vue.ty += (a.cy - r.top) * (1 - f) + a.dy;
   const l = parseFloat(ecran.style.width) * vue.echelle, h = parseFloat(ecran.style.height) * vue.echelle;
   const bx = (W - parseFloat(ecran.style.width)) / 2, by = (H - parseFloat(ecran.style.height)) / 2;
-  vue.tx = Math.min(-bx, Math.max(W - l - bx, vue.tx));
-  vue.ty = Math.min(-by, Math.max(H - h - by, vue.ty));
+  // plus petite que la zone (bandes noires) : centrée ; plus grande : ses bords ne rentrent pas dans la zone
+  const borner = (t, taille, total, b) => (taille <= total ? (total - taille) / 2 - b : Math.min(-b, Math.max(total - taille - b, t)));
+  vue.tx = borner(vue.tx, l, W, bx);
+  vue.ty = borner(vue.ty, h, H, by);
   disposer();
 }
 
@@ -492,7 +500,8 @@ function copierVersIPad() {
 async function collerVersMac() {
   try {
     const t = await Promise.race([navigator.clipboard.readText(), new Promise((_, ko) => setTimeout(ko, 4000))]);
-    if (t && t.length <= 1000000) envoyer({ t: 'presse_papiers', texte: t });
+    // en octets, comme le Mac compte : au-delà de sa limite, il fermerait la session
+    if (t && new Blob([t]).size <= 1 << 20) envoyer({ t: 'presse_papiers', texte: t });
   } catch { /* refusé ou vide : on colle ce que le Mac a déjà */ }
   // le raccourci complet, jamais la touche V seule : ⌘ a pu être relâché pendant la lecture (bulle « Coller » de Safari)
   envoyer({ t: 'raccourci', mods: ['cmd'], c: 'v' });

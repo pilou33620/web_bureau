@@ -23,6 +23,9 @@ use crate::commun::appairage::{globale, heure};
 
 type Images = mpsc::UnboundedSender<Vec<u8>>;
 
+/// Liaisons QUIC ouvertes en même temps, poignées de main comprises.
+const LIAISONS_MAX: usize = 16;
+
 enum Liaison {
     /// L'iPad ne s'est pas encore branché.
     Attente,
@@ -105,7 +108,13 @@ pub fn demarrer(local: bool, port: u16, mut tls: rustls::ServerConfig, billets: 
             };
             let _ = pret.send(point.local_addr().map(|a| a.port()));
             loop {
-                tokio::spawn(accueillir(point.accept().await, billets.clone()));
+                let arrivee = point.accept().await;
+                // une session à la fois, plus celle qui la remplace : au-delà, quelqu'un occupe le port
+                if point.open_connections() > LIAISONS_MAX {
+                    arrivee.refuse();
+                    continue;
+                }
+                tokio::spawn(accueillir(arrivee, billets.clone()));
             }
         });
     })?;

@@ -18,6 +18,7 @@ extern "C" {
     fn CGEventKeyboardSetUnicodeString(e: *mut c_void, n: usize, texte: *const u16);
     fn CGEventSetFlags(e: *mut c_void, indicateurs: u64);
     fn CGEventSetIntegerValueField(e: *mut c_void, champ: u32, valeur: i64);
+    fn CGEventSetDoubleValueField(e: *mut c_void, champ: u32, valeur: f64);
     fn CGEventPost(robinet: u32, e: *mut c_void);
 }
 
@@ -87,12 +88,22 @@ impl Entrees {
     }
 
     pub fn souris(&mut self, x: f64, y: f64) {
+        let avant = self.position;
         self.position = self.point(x, y);
         let (genre, bouton) = match self.boutons.iter().position(|b| *b) {
             Some(i) => (TYPES[i].2, i as u32),
             None => (5, 0), // kCGEventMouseMoved
         };
-        poster(unsafe { CGEventCreateMouseEvent(self.source, genre, self.position, bouton) }, self.indicateurs);
+        let e = unsafe { CGEventCreateMouseEvent(self.source, genre, self.position, bouton) };
+        if !e.is_null() {
+            // le déplacement, que macOS ne calcule pas pour un événement fabriqué : les jeux qui
+            // tournent la caméra à la souris ne lisent que lui (comme Sunshine)
+            unsafe {
+                CGEventSetDoubleValueField(e, 4, self.position.x - avant.x); // kCGMouseEventDeltaX
+                CGEventSetDoubleValueField(e, 5, self.position.y - avant.y); // kCGMouseEventDeltaY
+            }
+        }
+        poster(e, self.indicateurs);
     }
 
     pub fn bouton(&mut self, b: u8, bas: bool) {
