@@ -24,6 +24,7 @@ use crate::macos::{self, barre_menus, presse_papiers, CMTime};
 use crate::maj;
 use crate::protocole::{self, Bonjour, Codec, Entree};
 use crate::regulation::{self, Regulation};
+use crate::udp;
 use crate::video;
 use crate::ws::{self, Trames};
 
@@ -139,6 +140,8 @@ struct Etat {
 
 static ETAT: OnceLock<Etat> = OnceLock::new();
 static GARDE: OnceLock<Garde> = OnceLock::new();
+/// Les billets de la vidéo par UDP ; absent si l'écoute UDP n'a pas pu s'ouvrir.
+static UDP: OnceLock<Arc<udp::Billets>> = OnceLock::new();
 
 fn etat() -> &'static Etat {
     ETAT.get().expect("état non initialisé")
@@ -250,6 +253,7 @@ fn api_diagnostic() -> Reponse {
             "permissions": {"ecran": macos::permission_ecran(false), "accessibilite": macos::permission_accessibilite(false)},
             "ecran": {"virtuel": virtuel, "id": id, "pixels": [l, h]},
             "encodeurs": {"h264": essai(Codec::Avc), "hevc": essai(Codec::Hevc)},
+            "udp": UDP.get().is_some(),
             "verrouillage": {"verrouille": macos::ecran_verrouille(), "deverrouillage_verifie": verrou(&e.reglages).deverrouillage_verifie},
         }),
     )
@@ -561,6 +565,13 @@ fn derouler(
         Err(m) => return erreur(c, m),
     };
 
+    // vidéo par UDP : la page s'y branche avec ce billet si Safari sait faire ; d'ici là, et sinon, le WebSocket
+    let passage = UDP.get().map(|billets| billets.ouvrir());
+    if let Some(p) = &passage {
+        let _ = envoyer_texte(c, &json!({"t": "udp", "billet": p.billet})); // une liaison morte se voit dans la boucle
+    }
+    let mut precedente = 0u32;
+
     // boucle : images vers l'iPad, entrées vers le Mac
     let _ = c.delai_lecture(Some(Duration::from_millis(1)));
     let us = |t: Instant| t.duration_since(depart).as_micros() as u64;
@@ -597,9 +608,17 @@ fn derouler(
                 }
                 Message::Image { n, cle, donnees } => {
                     let capture_us = verrou(&flux.regulation).instant(n).map(us).unwrap_or(0);
-                    let mut corps = video::entete_image(cle, n, capture_us).to_vec();
+                    let mut corps = video::entete_image(cle, n, precedente, capture_us).to_vec();
+                    precedente = n;
                     corps.extend_from_slice(&donnees);
-                    c.write_all(&ws::trame(ws::BINAIRE, &corps)).and_then(|_| c.flush())
+                    let reste = match &passage {
+                        Some(p) => p.envoyer(corps).err(),
+                        None => Some(corps),
+                    };
+                    match reste {
+                        Some(corps) => c.write_all(&ws::trame(ws::BINAIRE, &corps)).and_then(|_| c.flush()),
+                        None => Ok(()),
+                    }
                 }
             };
             if ecrit.is_err() {
@@ -850,6 +869,19 @@ pub fn main() {
         // WebCodecs exige HTTPS, et cet outil contrôle tout le Mac : jamais en clair sur le réseau
         println!("[X] HTTPS impossible (openssl introuvable ou WEB_BUREAU_HTTP=1) : refus du mode réseau.");
         std::process::exit(3);
+    }
+    // vidéo par UDP (WebTransport) : même numéro de port, même certificat
+    if garde.schema() == "https" {
+        let billets = Arc::new(udp::Billets::default());
+        let ouverte = appairage::contexte_tls()
+            .and_then(|tls| udp::demarrer(!reseau, srv.port(), (*tls).clone(), billets.clone()).map_err(|e| e.to_string()));
+        match ouverte {
+            Ok(_) => {
+                let _ = UDP.set(billets);
+                println!("  Vidéo par UDP (WebTransport) : port {}", srv.port());
+            }
+            Err(m) => println!("  [!] vidéo par UDP indisponible ({m}) : elle passera par le WebSocket."),
+        }
     }
     if reseau {
         println!("  Depuis l'iPad :");

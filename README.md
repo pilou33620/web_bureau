@@ -2,8 +2,8 @@
 
 Prendre le contrôle du Mac (pensé pour un Mac mini sans écran) depuis l'iPad, dans Safari, sur le
 réseau local. Le Mac capture son écran (ScreenCaptureKit), l'encode avec sa puce (VideoToolbox,
-HEVC ou H.264, faible latence) et l'envoie par un WebSocket chiffré ; Safari le décode (WebCodecs)
-et renvoie souris, clavier, Pencil et gestes.
+HEVC ou H.264, faible latence) et l'envoie par UDP (WebTransport) si Safari le permet, sinon par un
+WebSocket chiffré ; Safari le décode (WebCodecs) et renvoie souris, clavier, Pencil et gestes.
 
 Cahier des charges : `~/Documents/temp/web_bureau/cahier-des-charges.html`.
 
@@ -80,7 +80,11 @@ Ensuite, débranchez l'écran : web_bureau crée un **écran virtuel** aux propo
   - débit : automatique (celui que Moonlight conseille : 10 Mb/s en 720p, 20 en 1080p, 40 en 1440p,
     80 en 4K, environ 43 pour l'écran d'un iPad Pro 11 pouces et 57 pour un 13 pouces, à 60 images
     par seconde ; la moitié à 30, 1,4 fois plus à 120), ou de 0,5 à 150 Mb/s. C'est un plafond : le débit baisse seul si le Wi-Fi ne suit pas.
-- **Mesures** (📈) : codec, images/s, débit, latence de la capture à l'écran.
+- **Mesures** (📈) : codec, UDP ou TCP, taille, images/s, débit, latence de la capture à l'écran.
+- **Vidéo par UDP** : rien à régler. Si Safari a WebTransport (iPadOS 26.4 ou plus récent), la vidéo
+  passe par UDP (QUIC), une image par flux : un paquet perdu ne retient que son image, et si elle
+  tarde plus de 50 ms la page demande une image qui se décode seule. Sinon, ou si l'UDP est filtré,
+  la vidéo passe par le WebSocket comme avant. Souris, clavier et le reste gardent le WebSocket.
 - **Infos** (ⓘ) : permissions, écran capturé, temps d'encodage, test du déverrouillage.
 
 ## Sécurité
@@ -98,6 +102,10 @@ Un appareil appairé contrôle **tout** le Mac. Ce qui protège l'accès :
 - les adresses publiques sont refusées (réseau local et Tailscale seulement), et les en-têtes `Host`
   et `Origin` sont vérifiés (DNS rebinding, WebSocket d'un autre site) ;
 - les écritures exigent l'en-tête `X-WEB_BUREAU` (protection CSRF) ;
+- le **port UDP** (même numéro) ne porte que la vidéo, du Mac vers l'iPad, sous le même certificat.
+  WebTransport n'envoie pas le cookie : la session du WebSocket, déjà authentifiée, donne à la page
+  un billet aléatoire à usage unique, périmé avec elle. Sans billet valide, ou depuis une adresse
+  publique, la liaison est refusée ;
 - chaque message de l'iPad est validé : position dans l'image, touche connue, tailles bornées. Un
   message invalide ferme la session ;
 - **icône dans la barre des menus** pendant une session, avec un menu « Couper la session » ;
@@ -136,8 +144,9 @@ web_bureau [--port N] [--local] [--sans-maj] [--sans-ecran-virtuel] [--nouveau-j
            [--sans-navigateur] [--sans-pause]
 ```
 
-Port 8803 par défaut (le suivant s'il est pris). `--local` : 127.0.0.1 seulement et **sans jeton**,
-pour les essais ; jamais en service.
+Port 8803 par défaut (le suivant s'il est pris), en TCP et en UDP : si le pare-feu de macOS est
+actif, il doit laisser entrer `web_bureau`. `--local` : 127.0.0.1 seulement et **sans jeton**, pour
+les essais ; jamais en service (et sans vidéo par UDP).
 
 ## Limites connues
 
@@ -158,9 +167,10 @@ pour les essais ; jamais en service.
 - Le code s'écrit sur le Pi, qui ne compile pas. La CI GitHub (macOS, Apple Silicon) lance les tests
   (`cargo test`, `node --test tests/*.test.js`) et publie l'exécutable signé.
 - `Cargo.lock` est suivi par git et la CI compile avec `--locked` : les bibliothèques ne changent que
-  quand on le décide. Le Pi n'ayant pas cargo, on le refait par la CI : `gh workflow run verrou.yml`,
-  puis `gh run download` de l'artefact `Cargo.lock`, à relire et committer.
-- Tests : protocole, trames WebSocket, régulation du débit, fichiers (confinement, liens
+  quand on le décide. Pour tout mettre à jour : `gh workflow run verrou.yml`, puis `gh run download`
+  de l'artefact `Cargo.lock`, à relire et committer.
+- Tests : protocole, trames WebSocket, régulation du débit, vidéo par UDP (un vrai client
+  WebTransport : billet, une image par flux, fermeture), ordre des images, fichiers (confinement, liens
   symboliques, envoi coupé), retour arrière des mises à jour, réglages abîmés, refus du serveur
   (CSRF, tailles, Origin), sécurité de l'appairage (tests recopiés de la caisse commune, HTTPS
   compris), et un test par geste.

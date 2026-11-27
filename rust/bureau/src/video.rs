@@ -1,15 +1,19 @@
 //! Ce que Safari (WebCodecs) doit savoir du flux : la chaîne du codec, tirée de la description
 //! avcC / hvcC que VideoToolbox fournit, et l'en-tête de chaque image.
 
-/// En-tête binaire d'une image : [1][drapeaux : bit0 = image clé][numéro u32][capture µs u64], gros-boutiste.
-pub const ENTETE_IMAGE: usize = 14;
+/// En-tête binaire d'une image, gros-boutiste :
+/// [1][drapeaux : bit0 = image clé][numéro u32][numéro de l'image envoyée avant elle u32][capture µs u64].
+/// Par UDP les images arrivent dans le désordre : la page ne décode une image qu'après celle
+/// qu'elle nomme (une image clé se décode seule).
+pub const ENTETE_IMAGE: usize = 18;
 
-pub fn entete_image(cle: bool, n: u32, capture_us: u64) -> [u8; ENTETE_IMAGE] {
+pub fn entete_image(cle: bool, n: u32, precedente: u32, capture_us: u64) -> [u8; ENTETE_IMAGE] {
     let mut e = [0u8; ENTETE_IMAGE];
     e[0] = 1;
     e[1] = cle as u8;
     e[2..6].copy_from_slice(&n.to_be_bytes());
-    e[6..14].copy_from_slice(&capture_us.to_be_bytes());
+    e[6..10].copy_from_slice(&precedente.to_be_bytes());
+    e[10..18].copy_from_slice(&capture_us.to_be_bytes());
     e
 }
 
@@ -57,7 +61,7 @@ mod essais {
 
     #[test]
     fn entete() {
-        let e = entete_image(true, 0x01020304, 5);
-        assert_eq!(e, [1, 1, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 5]);
+        let e = entete_image(true, 0x01020304, 0x0A0B0C0D, 5);
+        assert_eq!(e, [1, 1, 1, 2, 3, 4, 0x0A, 0x0B, 0x0C, 0x0D, 0, 0, 0, 0, 0, 0, 0, 5]);
     }
 }

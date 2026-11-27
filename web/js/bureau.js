@@ -12,7 +12,6 @@ let ws = null;
 let finVoulue = false; // la session s'est terminée exprès : pas de reconnexion automatique
 let decodeur = null;
 let config = null;
-let attendreCle = true;
 let touchesConnues = new Set();
 
 // -- réglages (ceux de Moonlight), gardés sur cet iPad -----------------------------
@@ -103,6 +102,7 @@ async function connecter() {
   moi.onclose = () => {
     if (ws !== moi) return; // déjà remplacée (liaison abandonnée, reprise)
     fermerDecodeur();
+    fermerUdp();
     ws = null;
     if (!finVoulue) {
       voile('Connexion perdue, nouvel essai…');
@@ -117,6 +117,7 @@ function reconnecter(texte) {
   ws = null;
   if (vieille) vieille.close();
   fermerDecodeur();
+  fermerUdp();
   voile(texte);
   connecter();
 }
@@ -166,7 +167,7 @@ function erreurDecodeur() {
 function configurer() {
   fermerDecodeur();
   decodeur = new VideoDecoder({ output: dessiner, error: erreurDecodeur });
-  attendreCle = true;
+  ordre.recommencer();
   try {
     decodeur.configure({
       codec: config.codec,
@@ -181,20 +182,62 @@ function configurer() {
   }
 }
 
+// L'ordre des images (web/js/ordre.js) : par UDP elles n'arrivent pas toujours dans l'ordre d'envoi.
+const ordre = new Ordre({
+  decoder: (i) => {
+    captures.set(i.n, i.captureUs);
+    decodeur.decode(new EncodedVideoChunk({ type: i.cle ? 'key' : 'delta', timestamp: i.n, data: i.donnees }));
+  },
+  accuser: (n) => envoyer({ t: 'ack', n }),
+  demanderCle: () => envoyer({ t: 'image_cle' }),
+});
+
 function recuImage(tampon) {
   const v = new DataView(tampon);
-  const cle = (v.getUint8(1) & 1) === 1;
-  const n = v.getUint32(2);
-  const captureUs = Number(v.getBigUint64(6));
   mesures.octets += tampon.byteLength;
-  if (!decodeur || decodeur.state !== 'configured' || (attendreCle && !cle)) {
-    envoyer({ t: 'ack', n }); // libère le Mac, qui n'attend pas une image que l'on ne montrera pas
-    if (attendreCle) envoyer({ t: 'image_cle' });
-    return;
-  }
-  attendreCle = false;
-  captures.set(n, captureUs);
-  decodeur.decode(new EncodedVideoChunk({ type: cle ? 'key' : 'delta', timestamp: n, data: new Uint8Array(tampon, 14) }));
+  ordre.recue({
+    cle: (v.getUint8(1) & 1) === 1,
+    n: v.getUint32(2),
+    precedente: v.getUint32(6),
+    captureUs: Number(v.getBigUint64(10)),
+    donnees: new Uint8Array(tampon, 18),
+  }, !!decodeur && decodeur.state === 'configured');
+}
+
+// -- vidéo par UDP (WebTransport) : une image par flux QUIC -----------------------------
+
+let udp = null;
+let udpBranche = false;
+
+async function ouvrirUdp(billet) {
+  fermerUdp();
+  if (!('WebTransport' in window)) return;
+  let liaison = null;
+  try {
+    liaison = new WebTransport(`https://${location.host}/udp?b=${billet}`);
+    udp = liaison;
+    await liaison.ready;
+    udpBranche = udp === liaison;
+    const flux = liaison.incomingUnidirectionalStreams.getReader();
+    for (;;) {
+      const { value, done } = await flux.read();
+      if (done) break;
+      // lus de front : une image retenue par un paquet perdu ne retient pas les suivantes
+      new Response(value).arrayBuffer().then((tampon) => {
+        if (udp !== liaison || tampon.byteLength < 18) return;
+        mesures.udp++;
+        recuImage(tampon);
+      }, () => { /* flux abandonné */ });
+    }
+  } catch { /* WebTransport refusé ou coupé : le Mac envoie la vidéo par le WebSocket */ }
+  if (udp === liaison) fermerUdp();
+}
+
+function fermerUdp() {
+  udpBranche = false;
+  if (!udp) return;
+  try { udp.close(); } catch { /* déjà fermée */ }
+  udp = null;
 }
 
 const captures = new Map();
@@ -226,6 +269,9 @@ function recuTexte(m) {
       disposer();
       configurer();
       sansVoile();
+      break;
+    case 'udp':
+      ouvrirUdp(m.billet);
       break;
     case 'ping':
       envoyer({ t: 'pong', n: m.n });
@@ -482,14 +528,15 @@ document.querySelectorAll('.fermer').forEach((b) => b.addEventListener('click', 
 
 // -- mesures ----------------------------------------------------------------------------------
 
-const mesures = { images: 0, octets: 0, latences: [], debit: 0, codec: '' };
+const mesures = { images: 0, octets: 0, udp: 0, latences: [], debit: 0, codec: '' };
 setInterval(() => {
   const l = mesures.latences.sort((a, b) => a - b);
   const mediane = l.length ? Math.round(l[l.length >> 1] / 1000) : '–';
-  $('mesures').textContent = `${mesures.codec || '–'} · ${config ? `${config.largeur}×${config.hauteur}` : '–'} · ${mesures.images} i/s · ${(mesures.octets * 8 / 1e6).toFixed(1)} Mb/s`
+  $('mesures').textContent = `${mesures.codec || '–'} · ${mesures.udp ? 'UDP' : 'TCP'} · ${config ? `${config.largeur}×${config.hauteur}` : '–'} · ${mesures.images} i/s · ${(mesures.octets * 8 / 1e6).toFixed(1)} Mb/s`
     + ` · capture→écran ${mediane} ms · cible ${(mesures.debit / 1e6).toFixed(0)} Mb/s`;
   mesures.images = 0;
   mesures.octets = 0;
+  mesures.udp = 0;
   mesures.latences = [];
 }, 1000);
 
@@ -588,6 +635,8 @@ async function diagnostic() {
       `Écran ${d.ecran.virtuel ? 'virtuel' : 'principal'} : ${d.ecran.pixels[0]} × ${d.ecran.pixels[1]} pixels`,
       `Encodeur H.264 : ${enc(d.encodeurs.h264)}`,
       `Encodeur HEVC : ${enc(d.encodeurs.hevc)}`,
+      `Vidéo par UDP : ${!d.udp ? 'port fermé sur le Mac' : !('WebTransport' in window) ? 'ce Safari n\'a pas WebTransport (iPadOS 26.4)'
+        : udpBranche ? 'branchée' : 'pas branchée (refusée par Safari, ou UDP filtré)'}`,
       `Déverrouillage depuis l'iPad : ${d.verrouillage.deverrouillage_verifie ? 'vérifié' : 'non vérifié'}`,
     ].join('\n');
   } catch {
