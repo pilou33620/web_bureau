@@ -27,7 +27,7 @@ pub struct Bonjour {
     pub hauteur: u32,
     /// Codecs que Safari décode.
     pub codecs: Vec<Codec>,
-    /// Images par seconde : 30 ou 60.
+    /// Images par seconde : 30, 60 ou 120.
     pub ips: u32,
     /// Plafond du débit en bit/s ; None : celui que Moonlight conseille pour cette taille et cette cadence.
     pub debit: Option<u32>,
@@ -107,7 +107,7 @@ pub fn lire(message: &str) -> Result<Entree, String> {
                 .collect();
             let ips = match &v["ips"] {
                 Value::Null => 60,
-                n => n.as_u64().filter(|n| [30, 60].contains(n)).ok_or("images par seconde invalides")? as u32,
+                n => n.as_u64().filter(|n| [30, 60, 120].contains(n)).ok_or("images par seconde invalides")? as u32,
             };
             let debit = match v["debit"].as_u64() {
                 None if !v["debit"].is_null() => return Err("débit invalide".into()),
@@ -186,6 +186,7 @@ mod essais {
             Ok(Entree::Bonjour(Bonjour { largeur: 1920, hauteur: 1080, codecs: vec![Codec::Avc], ips: 30, debit: Some(20_000_000) }))
         );
         assert!(matches!(lire(r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"debit":0}"#), Ok(Entree::Bonjour(Bonjour { debit: None, .. }))));
+        assert!(matches!(lire(r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"ips":120}"#), Ok(Entree::Bonjour(Bonjour { ips: 120, .. }))));
         assert_eq!(lire(r#"{"t":"souris","x":0.5,"y":1}"#), Ok(Entree::Souris { x: 0.5, y: 1.0 }));
         assert_eq!(lire(r#"{"t":"bouton","b":1,"bas":true}"#), Ok(Entree::Bouton { b: 1, bas: true }));
         assert_eq!(lire(r#"{"t":"touche","code":"KeyQ","bas":false}"#), Ok(Entree::Touche { kvk: 0x0C, bas: false }));
@@ -223,7 +224,7 @@ mod essais {
             r#"{"t":"bonjour","ecran":[2266],"codecs":[]}"#,
             r#"{"t":"deverrouiller","mdp":""}"#,
             r#"{"t":"deverrouiller","mdp":"a\nb"}"#,
-            r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"ips":120}"#,
+            r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"ips":90}"#,
             r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"ips":"60"}"#,
             r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"debit":499}"#,
             r#"{"t":"bonjour","ecran":[1280,720],"codecs":[],"debit":150001}"#,

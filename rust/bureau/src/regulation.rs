@@ -1,4 +1,4 @@
-//! Régulation du flux : jamais de file d'attente. Au plus EN_VOL_MAX images envoyées et pas encore
+//! Régulation du flux : jamais de file d'attente. Au plus 2 images (4 à 120 i/s) envoyées et pas encore
 //! décodées par l'iPad ; au-delà, les captures sont sautées (l'image encodée suivante s'appuie sur
 //! la dernière envoyée, rien ne casse). Le débit part du plafond demandé (comme Moonlight, qui
 //! tient un débit fixe), baisse vite quand l'iPad accuse réception tard, et remonte lentement.
@@ -6,7 +6,6 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-pub const EN_VOL_MAX: usize = 2;
 pub const DEBIT_MIN: u32 = 2_000_000;
 /// Une image sans accusé de réception depuis ce délai est tenue pour perdue (page en arrière-plan).
 pub const PERDUE: Duration = Duration::from_secs(1);
@@ -36,12 +35,14 @@ pub fn debit_defaut(largeur: u32, hauteur: u32, ips: u32) -> u32 {
         }
         None => TABLE[TABLE.len() - 1].1,
     };
-    // shortcut: proportionnel à la cadence, juste jusqu'à 60 i/s ; au-delà, Moonlight passe à la racine carrée
-    ((facteur * ips as f64 / 30.0).round() * 1_000_000.0) as u32
+    // au-delà de 60 i/s, le débit ne monte plus en proportion de la cadence mais de sa racine carrée
+    let cadence = if ips <= 60 { ips as f64 } else { (ips as f64 / 60.0).sqrt() * 60.0 };
+    ((facteur * cadence / 30.0).round() * 1_000_000.0) as u32
 }
 
 pub struct Regulation {
     en_vol: VecDeque<(u32, Instant)>,
+    en_vol_max: usize,
     debit: u32,
     max: u32,
     retard_lisse: f64,
@@ -51,9 +52,12 @@ pub struct Regulation {
 }
 
 impl Regulation {
-    /// `max` : le plafond du débit (bit/s), d'où l'on part.
-    pub fn new(max: u32, t: Instant) -> Self {
-        Regulation { en_vol: VecDeque::new(), debit: max, max, retard_lisse: 0.0, retard_min: f64::INFINITY, derniere_hausse: t, derniere_baisse: t }
+    /// `max` : le plafond du débit (bit/s), d'où l'on part. `ips` : la cadence demandée.
+    pub fn new(max: u32, ips: u32, t: Instant) -> Self {
+        // 33 ms d'images en vol au plus : 2 jusqu'à 60 i/s, 4 à 120 (à 2, un aller-retour de 17 ms
+        // suffirait à faire tomber la cadence sous 120)
+        let en_vol_max = (ips as usize / 30).max(2);
+        Regulation { en_vol: VecDeque::new(), en_vol_max, debit: max, max, retard_lisse: 0.0, retard_min: f64::INFINITY, derniere_hausse: t, derniere_baisse: t }
     }
 
     pub fn debit(&self) -> u32 {
@@ -66,7 +70,7 @@ impl Regulation {
         while self.en_vol.front().is_some_and(|(_, envoi)| t.duration_since(*envoi) > PERDUE) {
             self.en_vol.pop_front();
         }
-        self.en_vol.len() < EN_VOL_MAX
+        self.en_vol.len() < self.en_vol_max
     }
 
     pub fn envoyee(&mut self, n: u32, t: Instant) {
@@ -121,7 +125,7 @@ mod essais {
     #[test]
     fn jamais_plus_de_deux_en_vol() {
         let t = Instant::now();
-        let mut r = Regulation::new(30_000_000, t);
+        let mut r = Regulation::new(30_000_000, 60, t);
         assert!(r.peut_envoyer(t));
         r.envoyee(1, t);
         assert!(r.peut_envoyer(t));
@@ -145,9 +149,21 @@ mod essais {
     }
 
     #[test]
+    fn quatre_en_vol_a_120_images_par_seconde() {
+        let t = Instant::now();
+        let mut r = Regulation::new(30_000_000, 120, t);
+        for n in 1..=4 {
+            assert!(r.peut_envoyer(t));
+            r.envoyee(n, t);
+        }
+        assert!(!r.peut_envoyer(t));
+        assert!(Regulation::new(30_000_000, 30, t).en_vol_max == 2);
+    }
+
+    #[test]
     fn le_debit_suit_les_retards() {
         let t0 = Instant::now();
-        let mut r = Regulation::new(30_000_000, t0);
+        let mut r = Regulation::new(30_000_000, 60, t0);
         let depart = r.debit();
         assert_eq!(depart, 30_000_000, "on part du débit demandé");
         // le délai normal de cette installation : 40 ms (au-dessus de tout seuil fixe raisonnable)
@@ -176,7 +192,7 @@ mod essais {
     #[test]
     fn un_plafond_sous_le_plancher_est_tenu() {
         let t0 = Instant::now();
-        let mut r = Regulation::new(500_000, t0);
+        let mut r = Regulation::new(500_000, 60, t0);
         r.envoyee(0, t0);
         r.accusee(0, t0 + Duration::from_millis(10));
         for i in 1..20u32 {
@@ -196,6 +212,8 @@ mod essais {
         assert_eq!(debit_defaut(3840, 2160, 60), 80_000_000);
         assert_eq!(debit_defaut(2266, 1488, 60), 36_000_000); // l'iPad mini, entre 1080p et 1440p
         assert_eq!(debit_defaut(320, 200, 60), 2_000_000); // jamais sous la première ligne
+        assert_eq!(debit_defaut(1920, 1080, 120), 28_000_000); // 20 × √2
+        assert_eq!(debit_defaut(2266, 1488, 120), 51_000_000);
         assert_eq!(debit_defaut(8192, 8192, 60), 80_000_000); // ni au-dessus de la dernière
     }
 }

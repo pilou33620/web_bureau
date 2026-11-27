@@ -74,7 +74,9 @@ Ensuite, débranchez l'écran : web_bureau crée un **écran virtuel** aux propo
   - résolution : l'écran de l'iPad (par défaut), 720p, 1080p, 1440p ou 4K. 720p et 1440p donnent un
     bureau de 1280 × 720 points, 1080p et 4K un bureau de 1920 × 1080 points ; 1440p et 4K sont en
     Retina ;
-  - images par seconde : 30 ou 60 ;
+  - images par seconde : 30, 60 ou 120. 120 ne se voit que sur un iPad à écran 120 Hz (iPad Pro), et
+    seulement après avoir coupé « Prefer Page Rendering Updates near 60fps » dans Réglages › Apps ›
+    Safari › Avancé › Feature Flags ; l'écran virtuel du Mac passe alors à 120 Hz ;
   - débit : automatique (celui que Moonlight conseille : 10 Mb/s en 720p, 20 en 1080p, 36 pour
     l'iPad mini, 40 en 1440p, 80 en 4K, à 60 images par seconde ; la moitié à 30), ou de 0,5 à
     150 Mb/s. C'est un plafond : le débit baisse seul si le Wi-Fi ne suit pas.

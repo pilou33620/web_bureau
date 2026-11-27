@@ -344,12 +344,12 @@ fn ecran_capture() -> (u32, bool) {
     }
 }
 
-/// La taille de capture pour un iPad de `l` × `h` pixels.
-fn preparer_ecran(l: u32, h: u32) -> Result<(u32, usize, usize), String> {
+/// La taille de capture pour un iPad de `l` × `h` pixels, à `ips` images par seconde.
+fn preparer_ecran(l: u32, h: u32, ips: u32) -> Result<(u32, usize, usize), String> {
     let e = etat();
     let mut ecran = verrou(&e.ecran);
     if let Some(v) = ecran.as_mut() {
-        v.regler(l, h)?;
+        v.regler(l, h, if ips > 60 { 120 } else { 60 })?;
         let mut reglages = verrou(&e.reglages);
         if reglages.ecran != (l, h) {
             reglages.ecran = (l, h);
@@ -493,12 +493,12 @@ fn derouler(
     if !macos::permission_ecran(false) {
         return erreur(c, "permission « Enregistrement de l'écran » manquante sur le Mac".into());
     }
-    let (ecran, l, h) = match preparer_ecran(demande.largeur, demande.hauteur) {
+    let ips = demande.ips;
+    let (ecran, l, h) = match preparer_ecran(demande.largeur, demande.hauteur, ips) {
         Ok(x) => x,
         Err(m) => return erreur(c, m),
     };
     verrou(&e.entrees).regler_ecran(ecran);
-    let ips = demande.ips;
     let debit = demande.debit.unwrap_or_else(|| regulation::debit_defaut(l as u32, h as u32, ips));
     println!("[{}] session {} : {}×{}, {} i/s, {} Mb/s au plus", appairage::heure(), moi.ip, l, h, ips, debit / 1_000_000);
     barre_menus::afficher(format!("● web_bureau — {}", moi.ip));
@@ -506,7 +506,7 @@ fn derouler(
     let _veille = macos::empecher("PreventUserIdleDisplaySleep");
 
     let depart = Instant::now();
-    let flux = Arc::new(Flux { regulation: Mutex::new(Regulation::new(debit, depart)), image_cle: AtomicBool::new(true), numero: AtomicU32::new(1), en_attente: Mutex::new(None) });
+    let flux = Arc::new(Flux { regulation: Mutex::new(Regulation::new(debit, ips, depart)), image_cle: AtomicBool::new(true), numero: AtomicU32::new(1), en_attente: Mutex::new(None) });
     let (tx, rx) = mpsc::sync_channel::<Message>(8);
 
     // encodeur : HEVC si Safari le décode et que la puce l'accepte, sinon H.264
